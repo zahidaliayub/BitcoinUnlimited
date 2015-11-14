@@ -28,7 +28,7 @@
 #include <boost/foreach.hpp>
 #include <boost/signals2/signal.hpp>
 
-#include "leakybucket.h"
+#include "unlimited.h"
 
 class CAddrMan;
 class CScheduler;
@@ -65,10 +65,6 @@ static const bool DEFAULT_UPNP = false;
 static const size_t MAPASKFOR_MAX_SZ = MAX_INV_SZ;
 /** The maximum number of peer connections to maintain. */
 static const unsigned int DEFAULT_MAX_PEER_CONNECTIONS = 125;
-
-// These variables for traffic shaping need to be globally scoped so the GUI and CLI can adjust the parameters
-extern CLeakyBucket receiveShaper;
-extern CLeakyBucket sendShaper;
 
 
 unsigned int ReceiveFloodSize();

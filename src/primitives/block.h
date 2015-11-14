@@ -79,6 +79,7 @@ public:
 
     // memory only
     mutable bool fChecked;
+    mutable bool fExcessive;
 
     CBlock()
     {
@@ -104,6 +105,7 @@ public:
         CBlockHeader::SetNull();
         vtx.clear();
         fChecked = false;
+        fExcessive = false;
     }
 
     CBlockHeader GetBlockHeader() const
