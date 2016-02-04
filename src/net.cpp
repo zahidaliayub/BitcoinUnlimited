@@ -740,9 +740,11 @@ int CNetMessage::readData(const char* pch, unsigned int nBytes)
 }
 
 
-// requires LOCK(cs_vSend)
-void SocketSendData(CNode* pnode)
+// requires LOCK(cs_vSend), BU: returns > 0 if any data was sent, 0 if nothing accomplished.
+int SocketSendData(CNode* pnode)
 {
+    int progress=0; // This variable is incremented if something happens.  If it is zero at the bottom of the loop, we delay.  This solves spin loop issues where the select does not block but no bytes can be transferred (traffic shaping limited, for example).
+
     std::deque<CSerializeData>::iterator it = pnode->vSendMsg.begin();
 
     while (it != pnode->vSendMsg.end()) {
@@ -751,12 +753,11 @@ void SocketSendData(CNode* pnode)
 
         int amt2Send = min((int64_t)(data.size() - pnode->nSendOffset), sendShaper.available(SEND_SHAPER_MIN_FRAG));
         if (amt2Send == 0) {
-            if (sendShaper.available(SEND_SHAPER_MIN_FRAG) != INT_MAX) //Sleep if traffic shaping is turned on
-                MilliSleep(10);
             break;
         }
         int nBytes = send(pnode->hSocket, &data[pnode->nSendOffset], amt2Send, MSG_NOSIGNAL | MSG_DONTWAIT);
         if (nBytes > 0) {
+            progress++;
             pnode->nLastSend = GetTime();
             pnode->nSendBytes += nBytes;
             pnode->nSendOffset += nBytes;
@@ -781,7 +782,7 @@ void SocketSendData(CNode* pnode)
                     pnode->CloseSocketDisconnect();
                 }
             }
-            // couldn't send anything at all
+            // nBytes <= 0: couldn't send anything at all
             break;
         }
     }
@@ -791,6 +792,8 @@ void SocketSendData(CNode* pnode)
         assert(pnode->nSendSize == 0);
     }
     pnode->vSendMsg.erase(pnode->vSendMsg.begin(), it);
+
+    return progress;
 }
 
 static list<CNode*> vNodesDisconnected;
@@ -1238,8 +1241,7 @@ void ThreadSocketHandler()
             if (FD_ISSET(pnode->hSocket, &fdsetSend)) {
                 TRY_LOCK(pnode->cs_vSend, lockSend);
                 if (lockSend && sendShaper.try_leak(0)) {
-                    progress++;
-                    SocketSendData(pnode);
+                    progress += SocketSendData(pnode);
                 }
             }
 
@@ -1269,7 +1271,7 @@ void ThreadSocketHandler()
                 pnode->Release();
         }
 
-        if (progress == 0) // Nothing happened even though select did not block.  So slow us down.
+        if (progress == 0) // BU: Nothing happened even though select did not block.  So slow us down.
             MilliSleep(50);
     }
 }
