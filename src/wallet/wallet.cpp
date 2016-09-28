@@ -1897,16 +1897,31 @@ void CWallet::FillAvailableCoins()
 }
 
 
-bool CWallet::SelectCoinsBU(const CAmount& nTargetValue, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, CAmount& nValueRet, const CCoinControl* coinControl)
+bool CWallet::SelectCoinsBU(const CAmount& nNeededValue, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, CAmount& nValueRet, const CCoinControl* coinControl)
 {
+  nValueRet = 0;
   setCoinsRet.clear();
-  assert(nValueRet == 0);
-
+  CAmount nTargetValue = nNeededValue;
   // coin control -> return all selected outputs (we want all selected to go into the transaction)
   if (coinControl)
     {
       if (coinControl->HasSelected())  // Some coins were selected, let's find out which ones and add them to the set
         {
+	  std::vector<COutPoint> vOutpoints;
+	  coinControl->ListSelected(vOutpoints);
+          for (std::vector<COutPoint>::iterator i=vOutpoints.begin(); i != vOutpoints.end(); ++i)
+	    {
+	      std::map<uint256, CWalletTx>::iterator ent = mapWallet.find(i->hash);
+              if (ent != mapWallet.end())
+		{
+                CAmount thisOut = ent->second.vout[i->n].nValue;
+                nTargetValue -= thisOut;
+		nValueRet    += thisOut;
+                i->n;
+                setCoinsRet.insert(make_pair(&(ent->second), i->n));
+		}
+	    }
+
 	  /*
 	    BOOST_FOREACH(const COutput& out, vCoins)
 	    {
@@ -1939,7 +1954,7 @@ bool CWallet::SelectCoinsBU(const CAmount& nTargetValue, std::set<std::pair<cons
       }
     }
   if (g.first == 0 ) return false;
-  nValueRet = 0;
+
   for (TxoItVec::iterator i = g.second.begin(); i != g.second.end();)
     {
       SpendableTxos::iterator j = *i; // i is and iterator over iterators
@@ -1949,7 +1964,7 @@ bool CWallet::SelectCoinsBU(const CAmount& nTargetValue, std::set<std::pair<cons
       setCoinsRet.insert(make_pair(out.tx, out.i));
       available.erase(j); // remove this txo from the list so it is not used next time.  TODO: if the wallet does not use this tx then the txo is temporarily lost (until available is refilled).
     }
-  assert(nValueRet >= nTargetValue);
+  assert(nValueRet >= nNeededValue);
   return true;
 }
 

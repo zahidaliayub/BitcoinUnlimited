@@ -110,8 +110,10 @@ TxoGroup CoinSelection(/*const*/ SpendableTxos& available, const CAmount targetV
   SpendableTxos::iterator large;
   large = available.lower_bound(targetValue);         // Find the elem nearest the target but greater or =
   if (large == aEnd) // The amount is bigger than our biggest output.  We'll create a simple solution from a set of our biggest outputs.
-    { 
-      --large;
+    {
+      // if no transactions then give up
+      if (available.empty()) return TxoGroup(0,TxoItVec());
+      --large;  // If available is empty we'd crash here so must check it by now
       SpendableTxos::iterator i = large;
       CAmount total = large->first;
       TxoGroup group = makeGroup(i);

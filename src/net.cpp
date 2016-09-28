@@ -749,9 +749,9 @@ int CNetMessage::readHeader(const char *pch, unsigned int nBytes)
         return -1;
     }
 
-    // reject messages larger than MAX_SIZE
-    if (hdr.nMessageSize > MAX_SIZE)
-        return -1;
+    // BU this is handled in the readHeader caller: reject messages larger than MAX_SIZE
+    //if (hdr.nMessageSize > MAX_SIZE)
+    //    return -1;
 
     // switch state to reading message data
     in_data = true;

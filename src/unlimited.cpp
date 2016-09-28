@@ -411,6 +411,8 @@ std::string FormatCoinbaseMessage(const std::vector<std::string>& comments,const
     return ret;
 }
 
+// Finds a node whose name is at least partly what you passed in.  This allows you to specify just the IP and not the port, for example
+// Of course, you may not get the node you expect in cases where there is ambiguity
 CNode* FindLikelyNode(const std::string& addrName)
 {
     LOCK(cs_vNodes);
@@ -495,7 +497,7 @@ UniValue pushtx(const UniValue& params, bool fHelp)
 
     string strNode = params[0].get_str();
 
-    CNode* node = FindNode(strNode);
+    CNode* node = FindLikelyNode(strNode);
     if (!node) {
 #if 0
     if (strCommand == "onetry") {
