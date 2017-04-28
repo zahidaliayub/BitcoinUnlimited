@@ -559,7 +559,7 @@ void HandleBlockMessageThread(CNode *pfrom, const string &strCommand, const CBlo
                 pfrom->thinBlockWaitingForTxns = -1;
                 pfrom->thinBlock.SetNull();
             }
-          
+
             // Count up any other remaining nodes with thinblocks in flight.
             BOOST_FOREACH (CNode *pnode, vNodes)
             {

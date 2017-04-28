@@ -17,6 +17,7 @@
 #include "crypto/common.h"
 #include "hash.h"
 #include "primitives/transaction.h"
+#include "requestManager.h"
 #include "scheduler.h"
 #include "ui_interface.h"
 #include "utilstrencodings.h"
@@ -2092,14 +2093,41 @@ void ThreadMessageHandler()
             LOCK(cs_vNodes);
             vNodesCopy.reserve(vNodes.size());
             // Prefer thinBlockCapable nodes when doing communications.
-            BOOST_FOREACH(CNode* pnode, vNodes) {
-                if (pnode->ThinBlockCapable()) {
+            BOOST_FOREACH(CNode* pnode, vNodes)
+            {
+                if (pnode->ThinBlockCapable())
+                {
+                    // Check to see if there are any thinblocks in flight that have gone beyond the timeout interval.
+                    // If so then we need to disconnect them so that the thinblock data is nullified.  We coud null
+                    // the thinblock data here but that would possible cause a node to be baneed later if the thinblock
+                    // finally did show up. Better to just disconnect this slow node instead.
+                    if (pnode->mapThinBlocksInFlight.size() > 0)
+                    {
+                        std::map<uint256, int64_t>::iterator iter = pnode->mapThinBlocksInFlight.begin();
+                        while (iter != pnode->mapThinBlocksInFlight.end())
+                        {
+                            iter++;
+                            if ((GetTime() - (*iter).second) > THINBLOCK_DOWNLOAD_TIMEOUT && !pnode->fWhitelisted &&
+                                Params().NetworkIDString() != "regtest")
+                            {
+                                LogPrint("thin", "ERROR: Disconnecting peer=%d due to download timeout exceeded "
+                                         "(%d secs)\n",
+                                    pnode->GetId(),
+                                    (GetTime() - (*iter).second));
+
+                                pnode->fDisconnect = true;
+                            }
+                        }
+                    }
+
                     vNodesCopy.push_back(pnode);
                     pnode->AddRef();
                 }
             }
-            BOOST_FOREACH(CNode* pnode, vNodes) {
-                if (!pnode->ThinBlockCapable()) {
+            BOOST_FOREACH(CNode* pnode, vNodes)
+            {
+                if (!pnode->ThinBlockCapable())
+                {
                     vNodesCopy.push_back(pnode);
                     pnode->AddRef();
                 }
