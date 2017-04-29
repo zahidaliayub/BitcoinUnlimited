@@ -6355,8 +6355,22 @@ bool ProcessMessage(CNode* pfrom, std::string strCommand, CDataStream& vRecv, in
             LOCK(cs_main);
             if (mapBlocksInFlight.find(inv.hash) == mapBlocksInFlight.end() && !pfrom->fWhitelisted && !IsExpeditedNode(pfrom))
             {
-                Misbehaving(pfrom->GetId(), 100);
-                return error("Block %s was never requested, banning peer=%d", inv.hash.ToString(), pfrom->GetId());
+                // We also have to check mapThinBlocksInflight.  It is possible that an expedited block could beat
+                // our request for a full block (if for instance a thinblock request fails we re-request a full block).
+                // In that rare event mapBlocksInFlight will be empty because we do not track by peer but only by hash.
+                // TODO: mapBlocksInFlight is needing of a rewrite (so as to track by node as well as hash) and also
+                //       both mapBlocksInflight and mapThinBlocksInFlight should be put into and managed by the request
+                //       manager.
+                LOCK(pfrom->cs_mapthinblocksinflight);
+                {
+                    if (pfrom->mapThinBlocksInFlight.find(inv.hash) == pfrom->mapThinBlocksInFlight.end())
+                    {
+                        Misbehaving(pfrom->GetId(), 100);
+                        return error("Block %s was never requested, banning peer=%d",
+                            inv.hash.ToString(),
+                            pfrom->GetId());
+                    }
+                }
             }
         }
 
@@ -6779,6 +6793,34 @@ bool SendMessages(CNode* pto)
             }
         }
 
+        if (pto->ThinBlockCapable())
+        {
+            // Check to see if there are any thinblocks in flight that have gone beyond the timeout interval.
+            // If so then we need to disconnect them so that the thinblock data is nullified.  We coud null
+            // the thinblock data here but that would possible cause a node to be baneed later if the thinblock
+            // finally did show up. Better to just disconnect this slow node instead.
+            if (pto->mapThinBlocksInFlight.size() > 0)
+            {
+                LOCK(pto->cs_mapthinblocksinflight);
+                std::map<uint256, int64_t>::iterator iter = pto->mapThinBlocksInFlight.begin();
+                while (iter != pto->mapThinBlocksInFlight.end())
+                {
+                    if ((GetTime() - (*iter).second) > THINBLOCK_DOWNLOAD_TIMEOUT)
+                    {
+                        if (!pto->fWhitelisted && Params().NetworkIDString() != "regtest")
+                        {
+                            LogPrint("thin", "ERROR: Disconnecting peer=%d due to download timeout exceeded "
+                                     "(%d secs)\n",
+                                pto->GetId(),
+                                (GetTime() - (*iter).second));
+                            pto->fDisconnect = true;
+                            break;
+                        }
+                    }
+                    iter++;
+                }
+            }
+        }
 
         TRY_LOCK(cs_main, lockMain); // Acquire cs_main for IsInitialBlockDownload() and CNodeState()
         if (!lockMain)

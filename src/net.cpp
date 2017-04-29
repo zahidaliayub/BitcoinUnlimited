@@ -2097,32 +2097,6 @@ void ThreadMessageHandler()
             {
                 if (pnode->ThinBlockCapable())
                 {
-                    // Check to see if there are any thinblocks in flight that have gone beyond the timeout interval.
-                    // If so then we need to disconnect them so that the thinblock data is nullified.  We coud null
-                    // the thinblock data here but that would possible cause a node to be baneed later if the thinblock
-                    // finally did show up. Better to just disconnect this slow node instead.
-                    if (pnode->mapThinBlocksInFlight.size() > 0)
-                    {
-                        LOCK(pnode->cs_mapthinblocksinflight);
-                        std::map<uint256, int64_t>::iterator iter = pnode->mapThinBlocksInFlight.begin();
-                        while (iter != pnode->mapThinBlocksInFlight.end())
-                        {
-                            iter++;
-                            if ((GetTime() - (*iter).second) > THINBLOCK_DOWNLOAD_TIMEOUT)
-                            {
-                                if (!pnode->fWhitelisted && Params().NetworkIDString() != "regtest")
-                                {
-                                    LogPrint("thin", "ERROR: Disconnecting peer=%d due to download timeout exceeded "
-                                             "(%d secs)\n",
-                                        pnode->GetId(),
-                                        (GetTime() - (*iter).second));
-
-                                    pnode->fDisconnect = true;
-                                }
-                            }
-                        }
-                    }
-
                     vNodesCopy.push_back(pnode);
                     pnode->AddRef();
                 }
