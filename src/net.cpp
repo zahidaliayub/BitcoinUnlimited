@@ -2103,19 +2103,22 @@ void ThreadMessageHandler()
                     // finally did show up. Better to just disconnect this slow node instead.
                     if (pnode->mapThinBlocksInFlight.size() > 0)
                     {
+                        LOCK(pnode->cs_mapthinblocksinflight);
                         std::map<uint256, int64_t>::iterator iter = pnode->mapThinBlocksInFlight.begin();
                         while (iter != pnode->mapThinBlocksInFlight.end())
                         {
                             iter++;
-                            if ((GetTime() - (*iter).second) > THINBLOCK_DOWNLOAD_TIMEOUT && !pnode->fWhitelisted &&
-                                Params().NetworkIDString() != "regtest")
+                            if ((GetTime() - (*iter).second) > THINBLOCK_DOWNLOAD_TIMEOUT)
                             {
-                                LogPrint("thin", "ERROR: Disconnecting peer=%d due to download timeout exceeded "
-                                         "(%d secs)\n",
-                                    pnode->GetId(),
-                                    (GetTime() - (*iter).second));
+                                if (!pnode->fWhitelisted && Params().NetworkIDString() != "regtest")
+                                {
+                                    LogPrint("thin", "ERROR: Disconnecting peer=%d due to download timeout exceeded "
+                                             "(%d secs)\n",
+                                        pnode->GetId(),
+                                        (GetTime() - (*iter).second));
 
-                                pnode->fDisconnect = true;
+                                    pnode->fDisconnect = true;
+                                }
                             }
                         }
                     }
