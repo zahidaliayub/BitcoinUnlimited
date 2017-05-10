@@ -493,6 +493,8 @@ public:
     // track the # of times we sent this node a transaction
     CStatHistory<unsigned int> recvGap;
 
+    // record all incoming messages here if nonnull
+    FILE* recorder;
 
     CNode(SOCKET hSocketIn, const CAddress &addrIn, const std::string &addrNameIn = "", bool fInboundIn = false);
     ~CNode();

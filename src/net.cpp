@@ -99,6 +99,7 @@ int nMinXthinNodes = MIN_XTHIN_NODES;
 bool fAddressesInitialized = false;
 std::string strSubVersion;
 
+extern CTweak<std::string> recordDir;
 // BU moved to global.cpp
 // extern vector<CNode*> vNodes;
 // extern CCriticalSection cs_vNodes;
@@ -487,6 +488,12 @@ void CNode::CloseSocketDisconnect()
     TRY_LOCK(cs_vRecvMsg, lockRecv);
     if (lockRecv)
         vRecvMsg.clear();
+
+    if (recorder)
+    {
+        fclose(recorder);
+        recorder = nullptr;
+    }
 }
 
 void CNode::PushVersion()
@@ -706,7 +713,24 @@ void CNode::copyStats(CNodeStats& stats)
 // requires LOCK(cs_vRecvMsg)
 bool CNode::ReceiveMsgBytes(const char* pch, unsigned int nBytes)
 {
-    while (nBytes > 0) {
+    if (!recordDir.value.empty())
+    {
+        if (recorder == nullptr) // open the file
+        {
+            boost::filesystem::path dir(recordDir.value);
+            boost::filesystem::path file(std::string("node") + addrName + "." + boost::lexical_cast<std::string>(id));
+            boost::filesystem::path full_path = dir / file;
+            recorder = fopen(full_path.c_str(), "a");
+        }
+        if (recorder)
+        {
+            fwrite(pch, sizeof(char), nBytes, recorder);
+            fflush(recorder);
+        }
+    }
+
+    while (nBytes > 0)
+    {
         // get current incomplete message, or create a new one
         if (vRecvMsg.empty() ||
             vRecvMsg.back().complete())
@@ -2764,6 +2788,7 @@ CNode::CNode(SOCKET hSocketIn, const CAddress& addrIn, const std::string& addrNa
     addrKnown(5000, 0.001),
     filterInventoryKnown(50000, 0.000001)
 {
+    recorder = nullptr;
     nServices = 0;
     hSocket = hSocketIn;
     nRecvVersion = INIT_PROTO_VERSION;
@@ -2849,6 +2874,11 @@ CNode::CNode(SOCKET hSocketIn, const CAddress& addrIn, const std::string& addrNa
 CNode::~CNode()
 {
     CloseSocket(hSocket);
+    if (recorder)
+    {
+        fclose(recorder);
+        recorder = nullptr;
+    }
 
     if (pfilter)
       {
