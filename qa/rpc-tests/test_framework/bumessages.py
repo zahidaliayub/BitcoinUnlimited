@@ -1,9 +1,11 @@
 from .nodemessages import *
 
+
 class msg_buversion(object):
     command = b"buversion"
 
-    def __init__(self):
+    def __init__(self, addrFromPort=None):
+        self.addrFromPort = addrFromPort
         pass
 
     def deserialize(self, f):
@@ -17,6 +19,7 @@ class msg_buversion(object):
 
     def __repr__(self):
         return "msg_buversion(addrFromPort=%d)" % (self.addrFromPort)
+
 
 class msg_buverack(object):
     command = b"buverack"
@@ -34,9 +37,11 @@ class msg_buverack(object):
     def __repr__(self):
         return "msg_buverack()"
 
+
 class QHash(object):
     """quarter hash"""
-    def __init__(self,shortHash=None):
+
+    def __init__(self, shortHash=None):
         self.hash = shortHash
 
     def deserialize(self, f):
@@ -51,9 +56,11 @@ class QHash(object):
     def __repr__(self):
         return "QHash(0x%016x)" % (self.hash)
 
+
 class Hash(object):
     """sha256 hash"""
-    def __init__(self,hash=None):
+
+    def __init__(self, hash=None):
         self.hash = hash
 
     def deserialize(self, f):
@@ -73,7 +80,7 @@ class Hash(object):
 
 
 class CXThinBlock(CBlockHeader):
-    def __init__(self, header=None,vTxHashes=None, vMissingTx=None):
+    def __init__(self, header=None, vTxHashes=None, vMissingTx=None):
         super(CXThinBlock, self).__init__(header)
         self.vTxHashes = vTxHashes
         self.vMissingTx = vMissingTx
@@ -100,12 +107,12 @@ class CXThinBlock(CBlockHeader):
             if (count % 5) == 0:
                 s.append("\n%4d: " % count)
             s.append("%016x " % qh.hash)
-            count+=1
+            count += 1
 
         s.append("\nFull Transactions\n")
         count = 0
         for tx in self.vMissingTx:
-            s.append("%4d: %s\n" % (count,tx.summary()))
+            s.append("%4d: %s\n" % (count, tx.summary()))
             count += 1
         return "".join(s)
 
@@ -114,10 +121,11 @@ class CXThinBlock(CBlockHeader):
             % (self.nVersion, self.hashPrevBlock, self.hashMerkleRoot, time.ctime(self.nTime), self.nBits, self.nNonce, len(self.vTxHashes), len(self.vMissingTx))
 
     # too large to print
-    #def __repr__(self):
+    # def __repr__(self):
     #    return "CXThinBlock(nVersion=%i hashPrevBlock=%064x hashMerkleRoot=%064x nTime=%s nBits=%08x nNonce=%08x vTxHashes=%s vMissingTx=%s)" \
     #        % (self.nVersion, self.hashPrevBlock, self.hashMerkleRoot,
     #           time.ctime(self.nTime), self.nBits, self.nNonce, repr(self.vTxHashes), repr(self.vMissingTx))
+
 
 class CThinBlock(CBlockHeader):
     def __init__(self, header=None):
@@ -143,13 +151,14 @@ class CThinBlock(CBlockHeader):
             % (self.nVersion, self.hashPrevBlock, self.hashMerkleRoot, time.ctime(self.nTime), self.nBits, self.nNonce, len(self.vTxHashes), len(self.vMissingTx))
 
     # too large to print
-    #def __repr__(self):
+    # def __repr__(self):
     #    return "CThinBlock(nVersion=%i hashPrevBlock=%064x hashMerkleRoot=%064x nTime=%s nBits=%08x nNonce=%08x vTxHashes=%s vMissingTx=%s)" \
     #        % (self.nVersion, self.hashPrevBlock, self.hashMerkleRoot,
     #           time.ctime(self.nTime), self.nBits, self.nNonce, repr(self.vTxHashes), repr(self.vMissingTx))
 
+
 class CBloomFilter:
-    def __init__(self, vData = None):
+    def __init__(self, vData=None):
         self.vData = vData
         self.nHashFuncs = None
         self.nTweak = None
@@ -164,14 +173,15 @@ class CBloomFilter:
 
     def serialize(self):
         r = b""
-        r += ser_string(f,self.vData)
+        r += ser_string(f, self.vData)
         r += struct.pack("<I", self.nHashFuncs)
         r += struct.pack("<I", self.nTweak)
         r += struct.pack("<B", self.nFlags)
         return r
 
     def __repr__(self):
-        return "%s(vData=%s)" % (self.__class__.__name__,self.vData)
+        return "%s(vData=%s)" % (self.__class__.__name__, self.vData)
+
 
 class msg_thinblock(object):
     command = b"thinblock"
@@ -195,6 +205,7 @@ class msg_thinblock(object):
     def __repr__(self):
         return "msg_thinblock(block=%s)" % (repr(self.block))
 
+
 class msg_xthinblock(object):
     command = b"xthinblock"
 
@@ -217,11 +228,13 @@ class msg_xthinblock(object):
     def __repr__(self):
         return "msg_xthinblock(block=%s)" % (repr(self.block))
 
+
 class msg_Xb(object):
     """Expedited block message"""
     command = b"Xb"
     EXPEDITED_MSG_HDR = 1
     EXPEDITED_MSG_XTHIN = 2
+
     def __init__(self, block=None, hops=0, msgType=EXPEDITED_MSG_XTHIN):
         self.msgType = msgType
         self.hops = hops
@@ -229,8 +242,8 @@ class msg_Xb(object):
 
     def deserialize(self, f):
         self.msgType = struct.unpack("<B", f.read(1))[0]
-        self.hops    = struct.unpack("<B", f.read(1))[0]
-        if self.msgType==EXPEDITED_MSG_XTHIN:
+        self.hops = struct.unpack("<B", f.read(1))[0]
+        if self.msgType == EXPEDITED_MSG_XTHIN:
             self.block = CXThinBlock()
             self.block.deserialize(f)
         else:
@@ -241,7 +254,7 @@ class msg_Xb(object):
         r = b""
         r += struct.pack("<B", self.msgType)
         r += struct.pack("<B", self.hops)
-        if self.msgType==EXPEDITED_MSG_XTHIN:
+        if self.msgType == EXPEDITED_MSG_XTHIN:
             r += self.block.serialize()
         return r
 
@@ -250,6 +263,7 @@ class msg_Xb(object):
 
     def __repr__(self):
         return "msg_Xb(block=%s)" % (repr(self.block))
+
 
 class msg_get_xthin(object):
     command = b"get_xthin"
@@ -274,6 +288,7 @@ class msg_get_xthin(object):
     def __repr__(self):
         return "%s(inv=%s,filter=%s)" % (self.__class__.__name__, repr(self.inv), repr(self.filter))
 
+
 class msg_filterload(object):
     command = b"filterload"
 
@@ -293,6 +308,7 @@ class msg_filterload(object):
     def __repr__(self):
         return "%s(filter=%s)" % (self.__class__.__name__, repr(self.filter))
 
+
 class msg_filteradd(object):
     command = b"filteradd"
 
@@ -305,11 +321,12 @@ class msg_filteradd(object):
 
     def serialize(self):
         r = b""
-        r += ser_string(f,self.filter)
+        r += ser_string(f, self.filter)
         return r
 
     def __repr__(self):
         return "%s(filteradd=%s)" % (self.__class__.__name__, repr(self.filter))
+
 
 class msg_filterclear(object):
     command = b"filterclear"
@@ -326,6 +343,7 @@ class msg_filterclear(object):
 
     def __repr__(self):
         return "msg_filterclear()"
+
 
 class msg_get_xblocktx(object):
     command = b"get_xblocktx"
@@ -348,13 +366,15 @@ class msg_get_xblocktx(object):
     def __repr__(self):
         return "%s(blockhash=%s,qhash=%s)" % (self.__class__.__name__, repr(self.blockhash), repr(self.setCheapHashesToRequest))
 
+
 class msg_req_xpedited(object):
     """request expedited blocks"""
     command = b"req_xpedited"
     EXPEDITED_STOP = 1
     EXPEDITED_BLOCKS = 2
-    EXPEDITED_TXNS = 4 
-    def __init__(self,options=None):
+    EXPEDITED_TXNS = 4
+
+    def __init__(self, options=None):
         self.options = options
 
     def deserialize(self, f):
@@ -368,7 +388,6 @@ class msg_req_xpedited(object):
 
     def __repr__(self):
         return "%s(0x%x)" % (self.__class__.__name__, self.options)
-
 
 
 bumessagemap = {

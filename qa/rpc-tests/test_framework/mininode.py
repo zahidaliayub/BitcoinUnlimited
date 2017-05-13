@@ -21,7 +21,7 @@
 #     data structures that represent network messages
 # ser_*, deser_*: functions that handle serialization/deserialization
 
-
+import pdb
 import struct
 import socket
 import asyncore
@@ -48,7 +48,7 @@ MAX_BLOCK_SIZE = 1000000
 
 
 # Keep our own socket map for asyncore, so that we can track disconnects
-# ourselves (to workaround an issue with closing an asyncore socket when 
+# ourselves (to workaround an issue with closing an asyncore socket when
 # using select)
 mininode_socket_map = dict()
 
@@ -95,11 +95,11 @@ class NodeConnCB(object):
         if deliver_sleep is not None:
             time.sleep(deliver_sleep)
         with mininode_lock:
+            fn = 'on_' + message.command.decode('ascii')
             try:
-                getattr(self, 'on_' + message.command.decode('ascii'))(conn, message)
+                getattr(self, fn)(conn, message)
             except:
-                print("ERROR delivering %s (%s)" % (repr(message),
-                                                    sys.exc_info()[0]))
+                print("ERROR delivering %s (%s) to %s" % (repr(message), sys.exc_info()[0], fn))
 
     def on_version(self, conn, message):
         if message.nVersion >= 209:
@@ -121,23 +121,38 @@ class NodeConnCB(object):
             conn.send_message(want)
 
     def on_addr(self, conn, message): pass
+
     def on_alert(self, conn, message): pass
+
     def on_getdata(self, conn, message): pass
+
     def on_getblocks(self, conn, message): pass
+
     def on_tx(self, conn, message): pass
+
     def on_block(self, conn, message): pass
+
     def on_getaddr(self, conn, message): pass
+
     def on_headers(self, conn, message): pass
+
     def on_getheaders(self, conn, message): pass
+
     def on_ping(self, conn, message):
         if conn.ver_send > BIP0031_VERSION:
             conn.send_message(msg_pong(message.nonce))
+
     def on_reject(self, conn, message): pass
+
     def on_close(self, conn): pass
+
     def on_mempool(self, conn): pass
+
     def on_pong(self, conn, message): pass
 
 # More useful callbacks and functions for NodeConnCB's which have a single NodeConn
+
+
 class SingleNodeConnCB(NodeConnCB):
     def __init__(self):
         NodeConnCB.__init__(self)
@@ -164,9 +179,11 @@ class SingleNodeConnCB(NodeConnCB):
         self.ping_counter += 1
         return success
 
+
 def dupdate(x, y):
     x.update(y)
     return x
+
 
 class MsgAnnotater:
     def __init__(self):
@@ -180,6 +197,8 @@ class MsgAnnotater:
 
 # The actual NodeConn class
 # This class provides an interface for a p2p connection to a specified node
+
+
 class NodeConn(asyncore.dispatcher):
     messagemap = dupdate({
         b"version": msg_version,
@@ -199,7 +218,7 @@ class NodeConn(asyncore.dispatcher):
         b"reject": msg_reject,
         b"mempool": msg_mempool,
         b"sendheaders": msg_sendheaders,
-    },bumessagemap)
+    }, bumessagemap)
 
     MAGIC_BYTES = {
         "mainnet": b"\xf9\xbe\xb4\xd9",   # mainnet
@@ -231,9 +250,8 @@ class NodeConn(asyncore.dispatcher):
         vt.addrFrom.ip = "0.0.0.0"
         vt.addrFrom.port = 0
         self.send_message(vt, True)
-        print('MiniNode: Connecting to Bitcoin Node IP # ' + dstaddr + ':' \
-            + str(dstport))
-
+        print('MiniNode: Connecting to Bitcoin Node IP # ' + dstaddr + ':'
+              + str(dstport))
         try:
             self.connect((dstaddr, dstport))
         except:
@@ -241,8 +259,7 @@ class NodeConn(asyncore.dispatcher):
         self.rpc = rpc
 
     def show_debug_msg(self, msg):
-        # self.log.debug(msg)
-        pass
+        self.log.debug(msg)
 
     def handle_connect(self):
         self.show_debug_msg("MiniNode: Connected & Listening: \n")
@@ -260,19 +277,19 @@ class NodeConn(asyncore.dispatcher):
             pass
         self.cb.on_close(self)
 
-    def parse_messages(self,buffer):
-        if not type(buffer) == type(b""): # if not a buffer its a file
+    def parse_messages(self, buffer):
+        if not type(buffer) == type(b""):  # if not a buffer its a file
             buffer = buffer.read()
         tmp = self.cb
         ret = []
         ann = MsgAnnotater()
-        self.cb = type("", (), {"deliver": lambda self,conn,msg: ret.append(ann.annotate(msg, conn)) })()
-        #self.cb = type("", (), {"deliver": lambda conn,msg,lst=ret: [print(msg), ret.append(msg) })()
+        self.cb = type("", (), {"deliver": lambda self, conn, msg: ret.append(ann.annotate(msg, conn))})()
+        # self.cb = type("", (), {"deliver": lambda conn,msg,lst=ret: [print(msg), ret.append(msg) })()
         self.inject_data(buffer)
         self.cp = tmp
         return ret
 
-    def inject_data(self,buffer):
+    def inject_data(self, buffer):
         self.recvbuf += buffer
         self.got_data()
 
@@ -306,9 +323,8 @@ class NodeConn(asyncore.dispatcher):
         self.recvBufLen = len(self.recvbuf)
         try:
             while True:
-                print(self.curIndex) #,end='  ')
                 nowLen = len(self.recvbuf)
-                self.curIndex +=  (self.recvBufLen - nowLen)
+                self.curIndex += (self.recvBufLen - nowLen)
                 self.recvBufLen = nowLen
                 if nowLen < 4:
                     return
@@ -317,27 +333,27 @@ class NodeConn(asyncore.dispatcher):
                 if self.ver_recv < 209:
                     if len(self.recvbuf) < 4 + 12 + 4:
                         return
-                    command = self.recvbuf[4:4+12].split(b"\x00", 1)[0]
-                    msglen = struct.unpack("<i", self.recvbuf[4+12:4+12+4])[0]
+                    command = self.recvbuf[4:4 + 12].split(b"\x00", 1)[0]
+                    msglen = struct.unpack("<i", self.recvbuf[4 + 12:4 + 12 + 4])[0]
                     checksum = None
                     if len(self.recvbuf) < 4 + 12 + 4 + msglen:
                         return
-                    msg = self.recvbuf[4+12+4:4+12+4+msglen]
-                    self.recvbuf = self.recvbuf[4+12+4+msglen:]
+                    msg = self.recvbuf[4 + 12 + 4:4 + 12 + 4 + msglen]
+                    self.recvbuf = self.recvbuf[4 + 12 + 4 + msglen:]
                 else:
                     if len(self.recvbuf) < 4 + 12 + 4 + 4:
                         return
-                    command = self.recvbuf[4:4+12].split(b"\x00", 1)[0]
-                    msglen = struct.unpack("<i", self.recvbuf[4+12:4+12+4])[0]
-                    checksum = self.recvbuf[4+12+4:4+12+4+4]
+                    command = self.recvbuf[4:4 + 12].split(b"\x00", 1)[0]
+                    msglen = struct.unpack("<i", self.recvbuf[4 + 12:4 + 12 + 4])[0]
+                    checksum = self.recvbuf[4 + 12 + 4:4 + 12 + 4 + 4]
                     if len(self.recvbuf) < 4 + 12 + 4 + 4 + msglen:
                         return
-                    msg = self.recvbuf[4+12+4+4:4+12+4+4+msglen]
+                    msg = self.recvbuf[4 + 12 + 4 + 4:4 + 12 + 4 + 4 + msglen]
                     th = sha256(msg)
                     h = sha256(th)
                     if checksum != h[:4]:
                         raise ValueError("got bad checksum " + repr(self.recvbuf))
-                    self.recvbuf = self.recvbuf[4+12+4+4+msglen:]
+                    self.recvbuf = self.recvbuf[4 + 12 + 4 + 4 + msglen:]
                 if command in self.messagemap:
                     f = BytesIO(msg)
                     t = self.messagemap[command]()
@@ -350,7 +366,7 @@ class NodeConn(asyncore.dispatcher):
                     pdb.set_trace()
         except Exception as e:
             print('got_data:', repr(e))
-            import  traceback
+            import traceback
             traceback.print_tb(sys.exc_info()[2])
             pdb.post_mortem(e.__traceback__)
 
@@ -396,7 +412,7 @@ class NetworkThread(Thread):
             for fd, obj in mininode_socket_map.items():
                 if obj.disconnect:
                     disconnected.append(obj)
-            [ obj.handle_close() for obj in disconnected ]
+            [obj.handle_close() for obj in disconnected]
             asyncore.loop(0.1, use_poll=True, map=mininode_socket_map, count=1)
 
 

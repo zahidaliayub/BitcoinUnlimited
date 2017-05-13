@@ -9,9 +9,11 @@ from codecs import encode
 MY_VERSION = 60001  # past bip-31 for ping/pong
 MY_SUBVERSION = b"/python-mininode-tester:0.0.3/"
 
-COIN = 100000000 # 1 btc in satoshis
+COIN = 100000000  # 1 btc in satoshis
 
 # Helper function
+
+
 def wait_until(predicate, attempts=float('inf'), timeout=float('inf')):
     attempt = 0
     elapsed = 0
@@ -46,6 +48,7 @@ def deser_string(f):
         nit = struct.unpack("<Q", f.read(8))[0]
     return f.read(nit)
 
+
 def ser_string(s):
     if len(s) < 253:
         return struct.pack("B", len(s)) + s
@@ -54,6 +57,7 @@ def ser_string(s):
     elif len(s) < 0x100000000:
         return struct.pack("<BI", 254, len(s)) + s
     return struct.pack("<BQ", 255, len(s)) + s
+
 
 def deser_uint256(f):
     r = 0
@@ -206,11 +210,15 @@ def ser_int_vector(l):
     return r
 
 # Deserialize from a hex string representation (eg from RPC)
+
+
 def FromHex(obj, hex_string):
     obj.deserialize(BytesIO(unhexlify(hex_string.encode('ascii'))))
     return obj
 
 # Convert a binary-serializable object to hex (eg for submission via RPC)
+
+
 def ToHex(obj):
     return hexlify(obj.serialize()).decode('ascii')
 
@@ -244,6 +252,11 @@ class CAddress(object):
 
 
 class CInv(object):
+    MSG_TX = 1
+    MSG_BLOCK = 2
+    MSG_FILTERED_BLOCK = 3
+    MSG_THINBLOCK = 4
+    MSG_XTHINBLOCK = 5
     typemap = {
         0: "Error",
         1: "TX",
@@ -411,7 +424,7 @@ class CTransaction(object):
 
     def summary(self):
         self.calc_sha256()
-        s = [ "Transaction: %064x\n" % self.sha256]
+        s = ["Transaction: %064x\n" % self.sha256]
         s.append("%d inputs\n" % len(self.vin))
         for vin in self.vin:
             s.append("  %064x.%d\n" % (vin.prevout.hash, vin.prevout.n))
@@ -493,8 +506,9 @@ class CBlockHeader(object):
 
     def summary(self):
         s = []
-        s.append("Block:  %064x  Time:%s  Version:0x%x Bits:0x%08x\n" % (self.gethash(),time.ctime(self.nTime),self.nVersion,self.nBits))
-        s.append("Parent: %064x  Merkle: %064x" % (self.hashPrevBlock,self.hashMerkleRoot))
+        s.append("Block:  %064x  Time:%s  Version:0x%x Bits:0x%08x\n" %
+                 (self.gethash(), time.ctime(self.nTime), self.nVersion, self.nBits))
+        s.append("Parent: %064x  Merkle: %064x" % (self.hashPrevBlock, self.hashMerkleRoot))
         return "".join(s)
 
     def __str__(self):
@@ -530,11 +544,11 @@ class CBlock(CBlockHeader):
         while len(hashes) > 1:
             newhashes = []
             for i in range(0, len(hashes), 2):
-                i2 = min(i+1, len(hashes)-1)
+                i2 = min(i + 1, len(hashes) - 1)
                 newhashes.append(hash256(hashes[i] + hashes[i2]))
             hashes = newhashes
         if hashes:
-          return uint256_from_str(hashes[0])
+            return uint256_from_str(hashes[0])
         return 0
 
     def is_valid(self):
@@ -772,7 +786,12 @@ class msg_getdata(object):
     command = b"getdata"
 
     def __init__(self, inv=None):
-        self.inv = inv if inv != None else []
+        if inv is None:
+            self.inv = []
+        elif type(inv) == list:
+            self.inv = inv
+        else:
+            self.inv = [inv]
 
     def deserialize(self, f):
         self.inv = deser_vector(f, CInv)
@@ -928,6 +947,7 @@ class msg_mempool(object):
     def __repr__(self):
         return "msg_mempool()"
 
+
 class msg_sendheaders(object):
     command = b"sendheaders"
 
@@ -947,6 +967,8 @@ class msg_sendheaders(object):
 # number of entries
 # vector of hashes
 # hash_stop (hash of last desired block header, 0 to get as many as possible)
+
+
 class msg_getheaders(object):
     command = b"getheaders"
 
