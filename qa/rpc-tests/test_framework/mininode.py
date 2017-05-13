@@ -52,15 +52,6 @@ MAX_BLOCK_SIZE = 1000000
 # using select)
 mininode_socket_map = dict()
 
-# One lock for synchronizing all data access between the networking thread (see
-# NetworkThread below) and the thread running the test logic.  For simplicity,
-# NodeConn acquires this lock whenever delivering a message to to a NodeConnCB,
-# and whenever adding anything to the send buffer (in send_message()).  This
-# lock should be acquired in the thread running the test logic to synchronize
-# access to any data shared with the NodeConnCB or NodeConn.
-mininode_lock = RLock()
-
-
 # This is what a callback should look like for NodeConn
 # Reimplement the on_* functions to provide handling for events
 class NodeConnCB(object):

@@ -5,11 +5,19 @@ import hashlib
 from binascii import hexlify, unhexlify
 import time
 from codecs import encode
-
+from threading import RLock
 MY_VERSION = 60001  # past bip-31 for ping/pong
 MY_SUBVERSION = b"/python-mininode-tester:0.0.3/"
 
 COIN = 100000000  # 1 btc in satoshis
+
+# One lock for synchronizing all data access between the networking thread (see
+# NetworkThread below) and the thread running the test logic.  For simplicity,
+# NodeConn acquires this lock whenever delivering a message to to a NodeConnCB,
+# and whenever adding anything to the send buffer (in send_message()).  This
+# lock should be acquired in the thread running the test logic to synchronize
+# access to any data shared with the NodeConnCB or NodeConn.
+mininode_lock = RLock()
 
 # Helper function
 
