@@ -666,6 +666,8 @@ class CScript(bytes):
                 other = bytes(bchr(OP_1NEGATE))
             else:
                 other = CScriptOp.encode_op_pushdata(bn2vch(other))
+        elif isinstance(other, str):
+                other = other.encode()
         elif isinstance(other, (bytes, bytearray)):
             other = CScriptOp.encode_op_pushdata(other)
         return other
@@ -802,6 +804,97 @@ class CScript(bytes):
 
         return "CScript([%s])" % ', '.join(ops)
 
+    def is_p2sh(self):
+        """Test if the script is a p2sh scriptPubKey
+
+        Note that this test is consensus-critical.
+        """
+        return (len(self) == 23 and
+                _bord(self[0]) == OP_HASH160 and
+                _bord(self[1]) == 0x14 and
+                _bord(self[22]) == OP_EQUAL)
+
+    def is_push_only(self):
+        """Test if the script only contains pushdata ops
+
+        Note that this test is consensus-critical.
+
+        Scripts that contain invalid pushdata ops return False, matching the
+        behavior in Bitcoin Core.
+        """
+        try:
+            for (op, op_data, idx) in self.raw_iter():
+                # Note how OP_RESERVED is considered a pushdata op.
+                if op > OP_16:
+                    return False
+
+        except CScriptInvalidError:
+            return False
+        return True
+
+    def has_canonical_pushes(self):
+        """Test if script only uses canonical pushes
+
+        Not yet consensus critical; may be in the future.
+        """
+        try:
+            for (op, data, idx) in self.raw_iter():
+                if op > OP_16:
+                    continue
+
+                elif op < OP_PUSHDATA1 and op > OP_0 and len(data) == 1 and _bord(data[0]) <= 16:
+                    # Could have used an OP_n code, rather than a 1-byte push.
+                    return False
+
+                elif op == OP_PUSHDATA1 and len(data) < OP_PUSHDATA1:
+                    # Could have used a normal n-byte push, rather than OP_PUSHDATA1.
+                    return False
+
+                elif op == OP_PUSHDATA2 and len(data) <= 0xFF:
+                    # Could have used a OP_PUSHDATA1.
+                    return False
+
+                elif op == OP_PUSHDATA4 and len(data) <= 0xFFFF:
+                    # Could have used a OP_PUSHDATA2.
+                    return False
+
+        except CScriptInvalidError: # Invalid pushdata
+            return False
+        return True
+
+    def is_unspendable(self):
+        """Test if the script is provably unspendable"""
+        return (len(self) > 0 and
+                _bord(self[0]) == OP_RETURN)
+
+    def is_valid(self):
+        """Return True if the script is valid, False otherwise
+
+        The script is valid if all PUSHDATA's are valid; invalid opcodes do not
+        make is_valid() return False.
+        """
+        try:
+            list(self)
+        except CScriptInvalidError:
+            return False
+        return True
+
+    def to_p2sh_scriptPubKey(self, checksize=True):
+        """Create P2SH scriptPubKey from this redeemScript
+
+        That is, create the P2SH scriptPubKey that requires this script as a
+        redeemScript to spend.
+
+        checksize - Check if the redeemScript is larger than the 520-byte max
+        pushdata limit; raise ValueError if limit exceeded.
+
+        Since a >520-byte PUSHDATA makes EvalScript() fail, it's not actually
+        possible to redeem P2SH outputs with redeem scripts >520 bytes.
+        """
+        if checksize and len(self) > MAX_SCRIPT_ELEMENT_SIZE:
+            raise ValueError("redeemScript exceeds max allowed size; P2SH output would be unspendable")
+        return CScript([OP_HASH160, bitcoin.core.Hash160(self), OP_EQUAL])
+
     def GetSigOpCount(self, fAccurate):
         """Get the SigOp count.
 
@@ -845,6 +938,31 @@ def FindAndDelete(script, sig):
         r += script[last_sop_idx:]
     return CScript(r)
 
+def IsLowDERSignature(sig):
+    """
+    Loosely correlates with IsLowDERSignature() from script/interpreter.cpp
+    Verifies that the S value in a DER signature is the lowest possible value.
+    Used by BIP62 malleability fixes.
+    """
+    length_r = sig[3]
+    if isinstance(length_r, str):
+        length_r = int(struct.unpack('B', length_r)[0])
+    length_s = sig[5 + length_r]
+    if isinstance(length_s, str):
+        length_s = int(struct.unpack('B', length_s)[0])
+    s_val = list(struct.unpack(str(length_s) + 'B', sig[6 + length_r:6 + length_r + length_s]))
+
+    # If the S value is above the order of the curve divided by two, its
+    # complement modulo the order could have been used instead, which is
+    # one byte shorter when encoded correctly.
+    max_mod_half_order = [
+      0x7f,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+      0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+      0x5d,0x57,0x6e,0x73,0x57,0xa4,0x50,0x1d,
+      0xdf,0xe9,0x2f,0x46,0x68,0x1b,0x20,0xa0]
+
+    return CompareBigEndian(s_val, [0]) > 0 and \
+      CompareBigEndian(s_val, max_mod_half_order) <= 0
 
 def SignatureHash(script, txTo, inIdx, hashtype):
     """Consensus-correct SignatureHash

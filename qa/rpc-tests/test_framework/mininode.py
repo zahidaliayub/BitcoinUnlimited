@@ -321,6 +321,7 @@ class CBlockLocator(object):
 
 class COutPoint(object):
     def __init__(self, hash=0, n=0):
+        assert(type(hash) == int)
         self.hash = hash
         self.n = n
 
@@ -339,7 +340,7 @@ class COutPoint(object):
 
 
 class CTxIn(object):
-    def __init__(self, outpoint=None, scriptSig=b"", nSequence=0):
+    def __init__(self, outpoint=None, scriptSig=b"", nSequence=0xffffffff):
         if outpoint is None:
             self.prevout = COutPoint()
         else:
@@ -359,6 +360,9 @@ class CTxIn(object):
         r += ser_string(self.scriptSig)
         r += struct.pack("<I", self.nSequence)
         return r
+
+    def is_final(self):
+        return (self.nSequence == 0xffffffff)
 
     def __repr__(self):
         return "CTxIn(prevout=%s scriptSig=%s nSequence=%i)" \
@@ -380,6 +384,10 @@ class CTxOut(object):
         r += struct.pack("<q", int(self.nValue))
         r += ser_string(self.scriptPubKey)
         return r
+
+    def getHash(self):
+        t = self.serialize()
+        return hash256(t)
 
     def __repr__(self):
         return "CTxOut(nValue=%i.%08i scriptPubKey=%s)" \
@@ -405,12 +413,17 @@ class CTransaction(object):
             self.hash = None
 
     def deserialize(self, f):
+        if type(f) is str:
+            f = unhexlify(f)
+        if type(f) is bytes:
+            f = BytesIO(f)
         self.nVersion = struct.unpack("<i", f.read(4))[0]
         self.vin = deser_vector(f, CTxIn)
         self.vout = deser_vector(f, CTxOut)
         self.nLockTime = struct.unpack("<I", f.read(4))[0]
         self.sha256 = None
         self.hash = None
+        return self
 
     def serialize(self):
         r = b""
@@ -517,6 +530,7 @@ class CBlock(CBlockHeader):
     def deserialize(self, f):
         super(CBlock, self).deserialize(f)
         self.vtx = deser_vector(f, CTransaction)
+        return self
 
     def serialize(self):
         r = b""
