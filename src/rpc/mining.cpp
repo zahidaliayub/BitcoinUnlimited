@@ -33,6 +33,8 @@
 
 using namespace std;
 
+extern CBlock *proposedGenesisBlock;
+
 /**
  * Return average network hashes per second based on the last 'lookup' blocks,
  * or from the last difficulty change if 'lookup' is nonpositive.
@@ -559,6 +561,13 @@ UniValue getblocktemplate(const UniValue& params, bool fHelp)
     // Update nTime
     UpdateTime(pblock, consensusParams, pindexPrev);
     pblock->nNonce = 0;
+
+    // While the genesis() RPC call is running, GBT calls will return the genesis block template
+    if (proposedGenesisBlock)
+    {
+        LogPrint("blk", "Mining Genesis Block\n");
+        pblock = proposedGenesisBlock;
+    }
 
     UniValue aCaps(UniValue::VARR); aCaps.push_back("proposal");
 

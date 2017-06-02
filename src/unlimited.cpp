@@ -1508,10 +1508,15 @@ static const CRPCCommand commands[] =
 };
 /* clang-format on */
 
+/** Register Bitcoin Unlimited's RPC commands */
+void RegisterGenesisRPCCommands(CRPCTable &tableRPC);
+
 void RegisterUnlimitedRPCCommands(CRPCTable &tableRPC)
 {
     for (unsigned int vcidx = 0; vcidx < ARRAYLEN(commands); vcidx++)
         tableRPC.appendCommand(commands[vcidx].name, &commands[vcidx]);
+
+    RegisterGenesisRPCCommands(tableRPC);
 }
 
 
