@@ -2,6 +2,28 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+/* The request manager creates an isolation layer between the bitcoin message processor and the network.
+It tracks known locations of data objects and issues requests to the node most likely to respond.  It monitors responses
+and is capable of re-requesting the object if the node disconnects or does not respond.
+
+This stops this node from losing transactions if the remote node does not respond (previously, additional INVs would be
+dropped because the transaction is "in flight"), yet when the request finally timed out or the connection dropped, the
+INVs likely would no longer be propagating throughout the network so this node would miss the transaction.
+
+It should also be possible to use the statistics gathered by the request manager to make unsolicited requests for data
+likely held by other nodes, to choose the best node for expedited service, and to minimize data flow over poor
+links, such as through the "Great Firewall of China".
+
+This is a singleton class, instantiated as a global named "requester".
+
+The P2P message processing software should no longer directly request data from a node.  Instead call:
+requester.AskFor(...)
+
+After the object arrives (its ok to call after ANY object arrives), call "requester.Received(...)" to indicate
+successful receipt, "requester.Rejected(...)" to indicate a bad object (request manager will try someone else), or
+"requester.AlreadyReceived" to indicate the receipt of an object that has already been received.
+ */
+
 #ifndef REQUEST_MANAGER_H
 #define REQUEST_MANAGER_H
 #include "net.h"
@@ -53,13 +75,14 @@ public:
     // char    requestCount[MAX_AVAIL_FROM];
     // CNode* availableFrom[MAX_AVAIL_FROM];
     ObjectSourceList availableFrom;
-    int priority;
+    unsigned int priority;
 
     CUnknownObj()
     {
         rateLimited = false;
         outstandingReqs = 0;
         lastRequestTime = 0;
+        priority = 0;
     }
 
     bool AddSource(CNode *from); // returns true if the source did not already exist
@@ -97,10 +120,10 @@ public:
     CRequestManager();
 
     // Get this object from somewhere, asynchronously.
-    void AskFor(const CInv &obj, CNode *from, int priority = 0);
+    void AskFor(const CInv &obj, CNode *from, unsigned int priority = 0);
 
     // Get these objects from somewhere, asynchronously.
-    void AskFor(const std::vector<CInv> &objArray, CNode *from, int priority = 0);
+    void AskFor(const std::vector<CInv> &objArray, CNode *from, unsigned int priority = 0);
 
     // Indicate that we got this object, from and bytes are optional (for node performance tracking)
     void Received(const CInv &obj, CNode *from = NULL, int bytes = 0);

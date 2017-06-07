@@ -20,6 +20,7 @@
 #include "parallel.h"
 #include "policy/policy.h"
 #include "primitives/block.h"
+#include "requestManager.h"
 #include "rpc/server.h"
 #include "stat.h"
 #include "thinblock.h"
@@ -1388,7 +1389,6 @@ void LoadFilter(CNode *pfrom, CBloomFilter *filter)
         LOCK(pfrom->cs_filter);
         delete pfrom->pThinBlockFilter;
         pfrom->pThinBlockFilter = new CBloomFilter(*filter);
-        pfrom->pThinBlockFilter->UpdateEmptyFull();
     }
     uint64_t nSizeFilter = ::GetSerializeSize(*pfrom->pThinBlockFilter, SER_NETWORK, PROTOCOL_VERSION);
     LogPrint("thin", "Thinblock Bloom filter size: %d\n", nSizeFilter);
@@ -1705,8 +1705,11 @@ extern UniValue getstructuresizes(const UniValue &params, bool fHelp)
 
     ret.push_back(Pair("mapBlockIndex", mapBlockIndex.size()));
     // CChain
-    ret.push_back(Pair("setPreVerifiedTxHash", setPreVerifiedTxHash.size()));
-    ret.push_back(Pair("setUnVerifiedOrphanTxHash", setUnVerifiedOrphanTxHash.size()));
+    {
+        LOCK(cs_xval);
+        ret.push_back(Pair("setPreVerifiedTxHash", setPreVerifiedTxHash.size()));
+        ret.push_back(Pair("setUnVerifiedOrphanTxHash", setUnVerifiedOrphanTxHash.size()));
+    }
     ret.push_back(Pair("mapLocalHost", mapLocalHost.size()));
     ret.push_back(Pair("CNode::vWhitelistedRange", CNode::vWhitelistedRange.size()));
     ret.push_back(Pair("mapInboundConnectionTracker", mapInboundConnectionTracker.size()));
