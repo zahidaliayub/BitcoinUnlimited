@@ -58,6 +58,7 @@ EXTRA_LIBRARIES += \
 lib_LTLIBRARIES = $(LIBBITCOINCONSENSUS)
 
 bin_PROGRAMS =
+noinst_PROGRAMS =
 TESTS =
 BENCHMARKS =
 
@@ -73,7 +74,10 @@ endif
 # bitcoin core #
 BITCOIN_CORE_H = \
   addrman.h \
+  allowed_args.h \
   base58.h \
+  bandb.h \
+  banentry.h \
   bitnodes.h \
   bloom.h \
   chain.h \
@@ -90,9 +94,11 @@ BITCOIN_CORE_H = \
   compat/endian.h \
   compat/sanity.h \
   compressor.h \
+  connmgr.h \
   consensus/consensus.h \
   core_io.h \
   core_memusage.h \
+  dosman.h \
   expedited.h \
   httprpc.h \
   httpserver.h \
@@ -106,6 +112,7 @@ BITCOIN_CORE_H = \
   merkleblock.h \
   miner.h \
   net.h \
+  nodestate.h \
   leakybucket.h \
   netbase.h \
   noui.h \
@@ -171,10 +178,14 @@ libbitcoin_server_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 libbitcoin_server_a_SOURCES = \
   globals.cpp \
   addrman.cpp \
+  bandb.cpp \
+  banentry.cpp \
   bitnodes.cpp \
   bloom.cpp \
   chain.cpp \
   checkpoints.cpp \
+  connmgr.cpp \
+  dosman.cpp \
   expedited.cpp \
   httprpc.cpp \
   httpserver.cpp \
@@ -184,6 +195,7 @@ libbitcoin_server_a_SOURCES = \
   merkleblock.cpp \
   miner.cpp \
   net.cpp \
+  nodestate.cpp \
   noui.cpp \
   parallel.cpp \
   policy/fees.cpp \
@@ -315,6 +327,7 @@ libbitcoin_util_a_CPPFLAGS = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES)
 libbitcoin_util_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 libbitcoin_util_a_SOURCES = \
   support/pagelocker.cpp \
+  allowed_args.cpp \
   chainparamsbase.cpp \
   clientversion.cpp \
   compat/glibc_sanity.cpp \

@@ -15,11 +15,13 @@
 #include "consensus/consensus.h"
 #include "consensus/merkle.h"
 #include "consensus/validation.h"
+#include "dosman.h"
 #include "expedited.h"
 #include "hash.h"
 #include "init.h"
 #include "merkleblock.h"
 #include "net.h"
+#include "nodestate.h"
 #include "parallel.h"
 #include "policy/policy.h"
 #include "pow.h"
@@ -95,8 +97,8 @@ extern CCriticalSection cs_orphancache;
 extern std::map<uint256, COrphanTx> mapOrphanTransactions GUARDED_BY(cs_orphancache);
 extern std::map<uint256, std::set<uint256> > mapOrphanTransactionsByPrev GUARDED_BY(cs_orphancache);
 
-void EraseOrphansFor(NodeId peer) EXCLUSIVE_LOCKS_REQUIRED(cs_orphancache);
 int64_t nLastOrphanCheck = GetTime(); // Used in EraseOrphansByTime()
+static uint64_t nBytesOrphanPool = 0; // Current in memory size of the orphan pool.
 
 // BU: start block download at low numbers in case our peers are slow when we start
 /** Number of blocks that can be requested at any given time from a single peer. */
@@ -229,16 +231,6 @@ std::map<uint256, NodeId> mapBlockSource;
 boost::scoped_ptr<CRollingBloomFilter> recentRejects;
 uint256 hashRecentRejectsChainTip;
 
-/** Blocks that are in flight, and that are in the queue to be downloaded. Protected by cs_main. */
-struct QueuedBlock
-{
-    uint256 hash;
-    CBlockIndex *pindex; //!< Optional.
-    int64_t nTime; //! Time of "getdata" request in microseconds.
-    bool fValidatedHeaders; //!< Whether this block has validated headers at the time of request.
-};
-std::map<uint256, std::pair<NodeId, std::list<QueuedBlock>::iterator> > mapBlocksInFlight;
-
 /** Number of preferable block download peers. */
 int nPreferredDownload = 0;
 
@@ -260,88 +252,6 @@ int nPeersWithValidatedDownloads = 0;
 
 namespace
 {
-struct CBlockReject
-{
-    unsigned char chRejectCode;
-    std::string strRejectReason;
-    uint256 hashBlock;
-};
-
-/**
- * Maintain validation-specific state about nodes, protected by cs_main, instead
- * by CNode's own locks. This simplifies asynchronous operation, where
- * processing of incoming data is done after the ProcessMessage call returns,
- * and we're no longer holding the node's locks.
- */
-struct CNodeState
-{
-    //! The peer's address
-    CService address;
-    //! Whether we have a fully established connection.
-    bool fCurrentlyConnected;
-    //! Accumulated misbehaviour score for this peer.
-    int nMisbehavior;
-    //! Whether this peer should be disconnected and banned (unless whitelisted).
-    bool fShouldBan;
-    //! String name of this peer (debugging/logging purposes).
-    std::string name;
-    //! List of asynchronously-determined block rejections to notify this peer about.
-    std::vector<CBlockReject> rejects;
-    //! The best known block we know this peer has announced.
-    CBlockIndex *pindexBestKnownBlock;
-    //! The hash of the last unknown block this peer has announced.
-    uint256 hashLastUnknownBlock;
-    //! The last full block we both have.
-    CBlockIndex *pindexLastCommonBlock;
-    //! The best header we have sent our peer.
-    CBlockIndex *pindexBestHeaderSent;
-    //! Whether we've started headers synchronization with this peer.
-    bool fSyncStarted;
-    //! The start time of the sync
-    int64_t fSyncStartTime;
-    //! Were the first headers requested in a sync received
-    bool fFirstHeadersReceived;
-
-    std::list<QueuedBlock> vBlocksInFlight;
-    //! When the first entry in vBlocksInFlight started downloading. Don't care when vBlocksInFlight is empty.
-    int64_t nDownloadingSince;
-    int nBlocksInFlight;
-    int nBlocksInFlightValidHeaders;
-    //! Whether we consider this a preferred download peer.
-    bool fPreferredDownload;
-    //! Whether this peer wants invs or headers (when possible) for block announcements.
-    bool fPreferHeaders;
-
-    CNodeState()
-    {
-        fCurrentlyConnected = false;
-        nMisbehavior = 0;
-        fShouldBan = false;
-        pindexBestKnownBlock = NULL;
-        hashLastUnknownBlock.SetNull();
-        pindexLastCommonBlock = NULL;
-        pindexBestHeaderSent = NULL;
-        fSyncStarted = false;
-        nDownloadingSince = 0;
-        nBlocksInFlight = 0;
-        nBlocksInFlightValidHeaders = 0;
-        fPreferredDownload = false;
-        fPreferHeaders = false;
-    }
-};
-
-/** Map maintaining per-node state. Requires cs_main. */
-std::map<NodeId, CNodeState> mapNodeState;
-
-// Requires cs_main.
-CNodeState *State(NodeId pnode)
-{
-    std::map<NodeId, CNodeState>::iterator it = mapNodeState.find(pnode);
-    if (it == mapNodeState.end())
-        return NULL;
-    return &it->second;
-}
-
 int GetHeight()
 {
     LOCK(cs_main);
@@ -383,8 +293,6 @@ void FinalizeNode(NodeId nodeid)
     {
         mapBlocksInFlight.erase(entry.hash);
     }
-    // EraseOrphansFor(nodeid);  BUIP010 Xtreme Thinblocks - We do not want to delete orphans at any time.  We handle
-    // them when we accept a block
     nPreferredDownload -= state->fPreferredDownload;
     nPeersWithValidatedDownloads -= (state->nBlocksInFlightValidHeaders != 0);
     DbgAssert(nPeersWithValidatedDownloads >= 0, nPeersWithValidatedDownloads = 0);
@@ -555,10 +463,7 @@ CBlockIndex *LastCommonAncestor(CBlockIndex *pa, CBlockIndex *pb)
 
 /** Update pindexLastCommonBlock and add not-in-flight missing successors to vBlocks, until it has
  *  at most count entries. */
-void FindNextBlocksToDownload(NodeId nodeid,
-    unsigned int count,
-    std::vector<CBlockIndex *> &vBlocks,
-    NodeId &nodeStaller)
+static void FindNextBlocksToDownload(NodeId nodeid, unsigned int count, std::vector<CBlockIndex *> &vBlocks)
 {
     if (count == 0)
         return;
@@ -598,7 +503,6 @@ void FindNextBlocksToDownload(NodeId nodeid,
     int nWindowEnd = chainActive.Height() + BLOCK_DOWNLOAD_WINDOW;
 
     int nMaxHeight = std::min<int>(state->pindexBestKnownBlock->nHeight, nWindowEnd + 1);
-    NodeId waitingfor = -1;
     while (pindexWalk->nHeight < nMaxHeight)
     {
         // Read up to 128 (or more, if more blocks than that are needed) successors of pindexWalk (towards
@@ -629,29 +533,20 @@ void FindNextBlocksToDownload(NodeId nodeid,
                 if (pindex->nChainTx)
                     state->pindexLastCommonBlock = pindex;
             }
-            else if (mapBlocksInFlight.count(pindex->GetBlockHash()) == 0)
+            else
             {
-                // The block is not already downloaded, and not yet in flight.
+                // Return if we've reached the end of the download window.
                 if (pindex->nHeight > nWindowEnd)
                 {
-                    // We reached the end of the window.
-                    if (vBlocks.size() == 0 && waitingfor != nodeid)
-                    {
-                        // We aren't able to fetch anything, but we would be if the download window was one larger.
-                        nodeStaller = waitingfor;
-                    }
                     return;
                 }
+
+                // Return if we've reached the end of the number of blocks we can download for this peer.
                 vBlocks.push_back(pindex);
                 if (vBlocks.size() == count)
                 {
                     return;
                 }
-            }
-            else if (waitingfor == -1)
-            {
-                // This is the first already-in-flight block.
-                waitingfor = mapBlocksInFlight[pindex->GetBlockHash()].first;
             }
         }
     }
@@ -792,39 +687,32 @@ bool AddOrphanTx(const CTransaction &tx, NodeId peer) EXCLUSIVE_LOCKS_REQUIRED(c
 {
     AssertLockHeld(cs_orphancache);
 
+    if (mapOrphanTransactions.empty())
+        nBytesOrphanPool = 0;
+
     uint256 hash = tx.GetHash();
     if (mapOrphanTransactions.count(hash))
         return false;
 
-    // Ignore big transactions, to avoid a
-    // send-big-orphans memory exhaustion attack. If a peer has a legitimate
-    // large transaction with a missing parent then we assume
-    // it will rebroadcast it later, after the parent transaction(s)
-    // have been mined or received.
-    // 10,000 orphans, each of which is at most 5,000 bytes big is
-    // at most 500 megabytes of orphans:
-
-    // BU - Xtreme Thinblocks - begin section
-    // BU - we do not limit the size of orphans.  There is no danger to having memory overrun since the
-    //      orphan cache is limited to only 5000 entries by default. Only 500MB of memory could be consumed
-    //      if there were some kind of orphan memory exhaustion attack.
-    //      Dropping any tx means they need to be included in the thin block when it it mined, which is inefficient.
+    // Ignore orphans larger than the largest txn size allowed.
     unsigned int sz = tx.GetSerializeSize(SER_NETWORK, CTransaction::CURRENT_VERSION);
     if (sz > MAX_STANDARD_TX_SIZE)
     {
         LogPrint("mempool", "ignoring large orphan tx (size: %u, hash: %s)\n", sz, hash.ToString());
         return false;
     }
-    // BU - Xtreme Thinblocks - end section
 
+    uint64_t txSize = RecursiveDynamicUsage(tx);
     mapOrphanTransactions[hash].tx = tx;
     mapOrphanTransactions[hash].fromPeer = peer;
     mapOrphanTransactions[hash].nEntryTime = GetTime(); // BU - Xtreme Thinblocks;
+    mapOrphanTransactions[hash].nOrphanTxSize = txSize;
     BOOST_FOREACH (const CTxIn &txin, tx.vin)
         mapOrphanTransactionsByPrev[txin.prevout.hash].insert(hash);
 
-    LogPrint("mempool", "stored orphan tx %s (mapsz %u prevsz %u)\n", hash.ToString(), mapOrphanTransactions.size(),
-        mapOrphanTransactionsByPrev.size());
+    nBytesOrphanPool += txSize;
+    LogPrint("mempool", "stored orphan tx %s bytes:%ld (mapsz %u prevsz %u), orphan pool bytes:%ld\n", hash.ToString(),
+        txSize, mapOrphanTransactions.size(), mapOrphanTransactionsByPrev.size(), nBytesOrphanPool);
     return true;
 }
 
@@ -844,26 +732,11 @@ void EraseOrphanTx(uint256 hash) EXCLUSIVE_LOCKS_REQUIRED(cs_orphancache)
         if (itPrev->second.empty())
             mapOrphanTransactionsByPrev.erase(itPrev);
     }
+
+    nBytesOrphanPool -= it->second.nOrphanTxSize;
+    LogPrint("mempool", "Erased orphan tx %s of size %ld bytes, orphan pool bytes:%ld\n",
+        it->second.tx.GetHash().ToString(), it->second.nOrphanTxSize, nBytesOrphanPool);
     mapOrphanTransactions.erase(it);
-}
-
-void EraseOrphansFor(NodeId peer) EXCLUSIVE_LOCKS_REQUIRED(cs_orphancache)
-{
-    AssertLockHeld(cs_orphancache);
-
-    int nErased = 0;
-    std::map<uint256, COrphanTx>::iterator iter = mapOrphanTransactions.begin();
-    while (iter != mapOrphanTransactions.end())
-    {
-        std::map<uint256, COrphanTx>::iterator maybeErase = iter++; // increment to avoid iterator becoming invalid
-        if (maybeErase->second.fromPeer == peer)
-        {
-            EraseOrphanTx(maybeErase->second.tx.GetHash());
-            ++nErased;
-        }
-    }
-    if (nErased > 0)
-        LogPrint("mempool", "Erased %d orphan tx from peer %d\n", nErased, peer);
 }
 
 // BU - Xtreme Thinblocks: begin
@@ -884,9 +757,9 @@ void EraseOrphansByTime() EXCLUSIVE_LOCKS_REQUIRED(cs_orphancache)
         if (nEntryTime < nOrphanTxCutoffTime)
         {
             uint256 txHash = mi->second.tx.GetHash();
-            EraseOrphanTx(txHash);
             LogPrint(
                 "mempool", "Erased old orphan tx %s of age %d seconds\n", txHash.ToString(), GetTime() - nEntryTime);
+            EraseOrphanTx(txHash);
         }
     }
 
@@ -894,12 +767,15 @@ void EraseOrphansByTime() EXCLUSIVE_LOCKS_REQUIRED(cs_orphancache)
 }
 // BU - Xtreme Thinblocks: end
 
-unsigned int LimitOrphanTxSize(unsigned int nMaxOrphans) EXCLUSIVE_LOCKS_REQUIRED(cs_orphancache)
+unsigned int LimitOrphanTxSize(unsigned int nMaxOrphans, uint64_t nMaxBytes) EXCLUSIVE_LOCKS_REQUIRED(cs_orphancache)
 {
     AssertLockHeld(cs_orphancache);
 
+    // Limit the orphan pool size by either number of transactions or the max orphan pool size allowed.
+    // Limiting by pool size to 1/10th the size of the maxmempool alone is not enough because the total number
+    // of txns in the pool can adversely effect the size of the bloom filter in a get_xthin message.
     unsigned int nEvicted = 0;
-    while (mapOrphanTransactions.size() > nMaxOrphans)
+    while (mapOrphanTransactions.size() > nMaxOrphans || nBytesOrphanPool > nMaxBytes)
     {
         // Evict a random orphan:
         uint256 randomhash = GetRandHash();
@@ -1876,28 +1752,6 @@ void CheckForkWarningConditionsOnNewFork(CBlockIndex *pindexNewForkTip)
     CheckForkWarningConditions();
 }
 
-// Requires cs_main.
-void Misbehaving(NodeId pnode, int howmuch)
-{
-    if (howmuch == 0)
-        return;
-
-    CNodeState *state = State(pnode);
-    if (state == NULL)
-        return;
-
-    state->nMisbehavior += howmuch;
-    int banscore = GetArg("-banscore", DEFAULT_BANSCORE_THRESHOLD);
-    if (state->nMisbehavior >= banscore && state->nMisbehavior - howmuch < banscore)
-    {
-        LogPrintf("%s: %s (%d -> %d) BAN THRESHOLD EXCEEDED\n", __func__, state->name, state->nMisbehavior - howmuch,
-            state->nMisbehavior);
-        state->fShouldBan = true;
-    }
-    else
-        LogPrintf("%s: %s (%d -> %d)\n", __func__, state->name, state->nMisbehavior - howmuch, state->nMisbehavior);
-}
-
 void static InvalidChainFound(CBlockIndex *pindexNew)
 {
     if (!pindexBestInvalid || pindexNew->nChainWork > pindexBestInvalid->nChainWork)
@@ -1928,7 +1782,7 @@ void static InvalidBlockFound(CBlockIndex *pindex, const CValidationState &state
                 state.GetRejectReason().substr(0, MAX_REJECT_MESSAGE_LENGTH), pindex->GetBlockHash()};
             State(it->second)->rejects.push_back(reject);
             if (nDoS > 0)
-                Misbehaving(it->second, nDoS);
+                dosMan.Misbehaving(it->second, nDoS);
         }
     }
     if (!state.CorruptionPossible())
@@ -3050,9 +2904,9 @@ void static UpdateTip(CBlockIndex *pindexNew)
     nTimeBestReceived = GetTime();
     mempool.AddTransactionsUpdated(1);
 
-    LogPrintf("%s: new best=%s  height=%d  log2_work=%.8g  tx=%lu  date=%s progress=%f  cache=%.1fMiB(%utx)\n",
-        __func__, chainActive.Tip()->GetBlockHash().ToString(), chainActive.Height(),
-        std::log(chainActive.Tip()->nChainWork.getdouble()) / std::log(2.0), (unsigned long)chainActive.Tip()->nChainTx,
+    LogPrintf("%s: new best=%s  height=%d bits=%d log2_work=%.8g  tx=%lu  date=%s progress=%f  cache=%.1fMiB(%utx)\n",
+        __func__, chainActive.Tip()->GetBlockHash().ToString(), chainActive.Height(), chainActive.Tip()->nBits,
+        log(chainActive.Tip()->nChainWork.getdouble()) / log(2.0), (unsigned long)chainActive.Tip()->nChainTx,
         DateTimeStrFormat("%Y-%m-%d %H:%M:%S", chainActive.Tip()->GetBlockTime()),
         Checkpoints::GuessVerificationProgress(chainParams.Checkpoints(), chainActive.Tip()),
         pcoinsTip->DynamicMemoryUsage() * (1.0 / (1 << 20)), pcoinsTip->GetCacheSize());
@@ -4346,7 +4200,7 @@ static bool IsSuperMajority(int minVersion,
 
 bool ProcessNewBlock(CValidationState &state,
     const CChainParams &chainparams,
-    const CNode *pfrom,
+    CNode *pfrom,
     const CBlock *pblock,
     bool fForceProcessing,
     CDiskBlockPos *dbp,
@@ -4379,7 +4233,8 @@ bool ProcessNewBlock(CValidationState &state,
     //                called from other places.  Currently it seems best to leave cs_main here as is.
     {
         LOCK(cs_main);
-        bool fRequested = MarkBlockAsReceived(pblock->GetHash());
+        uint256 hash = pblock->GetHash();
+        bool fRequested = MarkBlockAsReceived(hash);
         fRequested |= fForceProcessing;
         if (!checked)
         {
@@ -4400,6 +4255,11 @@ bool ProcessNewBlock(CValidationState &state,
             // until the parents arrive.
             return error("%s: AcceptBlock FAILED", __func__);
         }
+
+        // We must indicate to the request manager that the block was received only after it has
+        // been stored to disk. Doing so prevents unnecessary re-requests.
+        CInv inv(MSG_BLOCK, hash);
+        requester.Received(inv, pfrom);
     }
 
     if (!ActivateBestChain(state, chainparams, pblock, fParallel))
@@ -4905,6 +4765,7 @@ void UnloadBlockIndex()
         LOCK(cs_orphancache);
         mapOrphanTransactions.clear();
         mapOrphanTransactionsByPrev.clear();
+        nBytesOrphanPool = 0;
     }
 
     LOCK(cs_main);
@@ -5734,10 +5595,10 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
     {
         if (pfrom->nVersion >= NO_BLOOM_VERSION)
         {
-            Misbehaving(pfrom->GetId(), 100);
+            dosMan.Misbehaving(pfrom->GetId(), 100);
             return false;
         }
-        else if (GetBoolArg("-enforcenodebloom", false))
+        else
         {
             pfrom->fDisconnect = true;
             return false;
@@ -5752,10 +5613,9 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         {
             pfrom->PushMessage(
                 NetMsgType::REJECT, strCommand, REJECT_DUPLICATE, std::string("Duplicate version message"));
-            LOCK(cs_main);
-            Misbehaving(pfrom->GetId(), 100);
-            return error("Duplicate version message received - banning peer=%d version=%s ip=%s", pfrom->GetId(),
-                pfrom->cleanSubVer, pfrom->addrName.c_str());
+            pfrom->fDisconnect = true;
+            return error("Duplicate version message received - disconnecting peer=%s version=%s", pfrom->GetLogName(),
+                pfrom->cleanSubVer);
         }
 
         int64_t nTime;
@@ -5772,7 +5632,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
             pfrom->PushMessage(NetMsgType::REJECT, strCommand, REJECT_OBSOLETE,
                 strprintf("Protocol Version must be %d or greater", MIN_PEER_PROTO_VERSION));
             LOCK(cs_main);
-            Misbehaving(pfrom->GetId(), 100);
+            dosMan.Misbehaving(pfrom->GetId(), 100);
             return error("Using obsolete protocol version %i - banning peer=%d version=%s ip=%s", pfrom->nVersion,
                 pfrom->GetId(), pfrom->cleanSubVer, pfrom->addrName.c_str());
         }
@@ -5831,13 +5691,13 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
                 CAddress addr = GetLocalAddress(&pfrom->addr);
                 if (addr.IsRoutable())
                 {
-                    LogPrintf("ProcessMessages: advertising address %s\n", addr.ToString());
+                    LogPrint("net", "ProcessMessages: advertising address %s\n", addr.ToString());
                     pfrom->PushAddress(addr);
                 }
                 else if (IsPeerAddrLocalGood(pfrom))
                 {
                     addr.SetIP(pfrom->addrLocal);
-                    LogPrintf("ProcessMessages: advertising address %s\n", addr.ToString());
+                    LogPrint("net", "ProcessMessages: advertising address %s\n", addr.ToString());
                     pfrom->PushAddress(addr);
                 }
             }
@@ -5886,14 +5746,8 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
     {
         // Must have version message before anything else (Although we may send our VERSION before
         // we receive theirs, it would not be possible to receive their VERACK before their VERSION).
-        // NOTE:  we MUST explicitly ban the peer here.  If we only indicate a misbehaviour then the peer
-        //        may never be banned since the banning process requires that messages be sent back. If an
-        //        attacker sends us messages that do not require a response coupled with an nVersion of zero
-        //        then they can continue unimpeded even though they have exceeded the misbehaving threshold.
         pfrom->fDisconnect = true;
-        CNode::Ban(pfrom->addr, BanReasonNodeMisbehaving);
-        return error("VERSION was not received before other messages - banning peer=%d ip=%s", pfrom->GetId(),
-            pfrom->addrName.c_str());
+        return error("%s receieved before VERSION message - disconnecting peer=%s", strCommand, pfrom->GetLogName());
     }
 
 
@@ -5902,17 +5756,15 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         // If we haven't sent a VERSION message yet then we should not get a VERACK message.
         if (pfrom->tVersionSent < 0)
         {
-            LOCK(cs_main);
-            Misbehaving(pfrom->GetId(), 100);
-            return error("VERACK received but we never sent a VERSION message - banning peer=%d version=%s ip=%s",
-                pfrom->GetId(), pfrom->cleanSubVer, pfrom->addrName.c_str());
+            pfrom->fDisconnect = true;
+            return error("VERACK received but we never sent a VERSION message - disconnecting peer=%s version=%s",
+                pfrom->GetLogName(), pfrom->cleanSubVer);
         }
         if (pfrom->fSuccessfullyConnected)
         {
-            LOCK(cs_main);
-            Misbehaving(pfrom->GetId(), 100);
-            return error("duplicate VERACK received - banning peer=%d version=%s ip=%s", pfrom->GetId(),
-                pfrom->cleanSubVer, pfrom->addrName.c_str());
+            pfrom->fDisconnect = true;
+            return error("duplicate VERACK received - disconnecting peer=%s version=%s", pfrom->GetLogName(),
+                pfrom->cleanSubVer);
         }
 
         pfrom->fSuccessfullyConnected = true;
@@ -5958,8 +5810,8 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         // If they are a bad peer and keep trying to reconnect and still do not VERACK, they will eventually
         // get banned by the connection slot algorithm which tracks disconnects and reconnects.
         pfrom->fDisconnect = true;
-        LogPrint("net", "ERROR: disconnecting - VERACK not received within %d seconds for peer=%d version=%s ip=%s\n",
-            VERACK_TIMEOUT, pfrom->GetId(), pfrom->cleanSubVer, pfrom->addrName.c_str());
+        LogPrint("net", "ERROR: disconnecting - VERACK not received within %d seconds for peer=%s version=%s\n",
+            VERACK_TIMEOUT, pfrom->GetLogName(), pfrom->cleanSubVer);
 
         // update connection tracker which is used by the connection slot algorithm.
         LOCK(cs_mapInboundConnectionTracker);
@@ -5981,7 +5833,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
             return true;
         if (vAddr.size() > 1000)
         {
-            Misbehaving(pfrom->GetId(), 20);
+            dosMan.Misbehaving(pfrom->GetId(), 20);
             return error("message addr size() = %u", vAddr.size());
         }
 
@@ -6057,7 +5909,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         if (vInv.size() > MAX_INV_SZ || vInv.empty())
         {
             LOCK(cs_main);
-            Misbehaving(pfrom->GetId(), 20);
+            dosMan.Misbehaving(pfrom->GetId(), 20);
             return error("message inv size() = %u", vInv.size());
         }
         for (unsigned int nInv = 0; nInv < vInv.size(); nInv++)
@@ -6066,7 +5918,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
             if (!((inv.type == MSG_TX) || (inv.type == MSG_BLOCK)) || inv.hash.IsNull())
             {
                 LOCK(cs_main);
-                Misbehaving(pfrom->GetId(), 20);
+                dosMan.Misbehaving(pfrom->GetId(), 20);
                 return error("message inv invalid type = %u or is null hash %s", inv.type, inv.hash.ToString());
             }
         }
@@ -6129,7 +5981,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
 
             if (pfrom->nSendSize > (SendBufferSize() * 2))
             {
-                Misbehaving(pfrom->GetId(), 50);
+                dosMan.Misbehaving(pfrom->GetId(), 50);
                 return error("send buffer size() = %u", pfrom->nSendSize);
             }
         }
@@ -6143,7 +5995,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         // BU check size == 0 to be intolerant of an empty and useless request
         if ((vInv.size() > MAX_INV_SZ) || (vInv.size() == 0))
         {
-            Misbehaving(pfrom->GetId(), 20);
+            dosMan.Misbehaving(pfrom->GetId(), 20);
             return error("message getdata size() = %u", vInv.size());
         }
 
@@ -6154,7 +6006,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
             if (!((inv.type == MSG_TX) || (inv.type == MSG_BLOCK) || (inv.type == MSG_FILTERED_BLOCK) ||
                     (inv.type == MSG_THINBLOCK) || (inv.type == MSG_XTHINBLOCK)))
             {
-                Misbehaving(pfrom->GetId(), 20);
+                dosMan.Misbehaving(pfrom->GetId(), 20);
                 return error("message inv invalid type = %u", inv.type);
             }
             // inv.hash does not need validation, since SHA2556 hash can be any value
@@ -6346,7 +6198,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
                         if (stateDummy.IsInvalid(nDos) && nDos > 0)
                         {
                             // Punish peer that gave us an invalid orphan tx
-                            Misbehaving(fromPeer, nDos);
+                            dosMan.Misbehaving(fromPeer, nDos);
                             setMisbehaving.insert(fromPeer);
                             LogPrint("mempool", "   invalid orphan tx %s\n", orphanHash.ToString());
                         }
@@ -6372,9 +6224,11 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
             AddOrphanTx(tx, pfrom->GetId());
 
             // DoS prevention: do not allow mapOrphanTransactions to grow unbounded
-            unsigned int nMaxOrphanTx =
+            static unsigned int nMaxOrphanTx =
                 (unsigned int)std::max((int64_t)0, GetArg("-maxorphantx", DEFAULT_MAX_ORPHAN_TRANSACTIONS));
-            unsigned int nEvicted = LimitOrphanTxSize(nMaxOrphanTx);
+            static uint64_t nMaxOrphanPoolSize =
+                (uint64_t)std::max((int64_t)0, (GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000 / 10));
+            unsigned int nEvicted = LimitOrphanTxSize(nMaxOrphanTx, nMaxOrphanPoolSize);
             if (nEvicted > 0)
                 LogPrint("mempool", "mapOrphan overflow, removed %u tx\n", nEvicted);
         }
@@ -6415,7 +6269,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
                 pfrom->PushMessage(NetMsgType::REJECT, strCommand, (unsigned char)state.GetRejectCode(),
                     state.GetRejectReason().substr(0, MAX_REJECT_MESSAGE_LENGTH), inv.hash);
             if (nDoS > 0)
-                Misbehaving(pfrom->GetId(), nDoS);
+                dosMan.Misbehaving(pfrom->GetId(), nDoS);
         }
         FlushStateToDisk(state, FLUSH_STATE_PERIODIC);
     }
@@ -6429,7 +6283,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         unsigned int nCount = ReadCompactSize(vRecv);
         if (nCount > MAX_HEADERS_RESULTS)
         {
-            Misbehaving(pfrom->GetId(), 20);
+            dosMan.Misbehaving(pfrom->GetId(), 20);
             return error("headers message size = %u", nCount);
         }
         headers.resize(nCount);
@@ -6464,7 +6318,6 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
 
             if (header.hashPrevBlock != hashLastBlock)
             {
-                Misbehaving(pfrom->GetId(), 20);
                 return error("non-continuous headers sequence");
             }
             hashLastBlock = header.GetHash();
@@ -6481,7 +6334,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
                 if (state.IsInvalid(nDoS))
                 {
                     if (nDoS > 0)
-                        Misbehaving(pfrom->GetId(), nDoS);
+                        dosMan.Misbehaving(pfrom->GetId(), nDoS);
                     return error("invalid header received");
                 }
             }
@@ -6564,7 +6417,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         if (!pfrom->ThinBlockCapable())
         {
             LOCK(cs_main);
-            Misbehaving(pfrom->GetId(), 100);
+            dosMan.Misbehaving(pfrom->GetId(), 100);
             return error("Thinblock message received from a non thinblock node, peer=%d", pfrom->GetId());
         }
 
@@ -6584,7 +6437,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
                 if (pfrom->nGetXthinCount >= 20)
                 {
                     LOCK(cs_main);
-                    Misbehaving(pfrom->GetId(), 100); // If they exceed the limit then disconnect them
+                    dosMan.Misbehaving(pfrom->GetId(), 100); // If they exceed the limit then disconnect them
                     return error("requesting too many get_xthin");
                 }
             }
@@ -6598,7 +6451,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         if (!((inv.type == MSG_XTHINBLOCK) || (inv.type == MSG_THINBLOCK)) || inv.hash.IsNull())
         {
             LOCK(cs_main);
-            Misbehaving(pfrom->GetId(), 100);
+            dosMan.Misbehaving(pfrom->GetId(), 100);
             return error("invalid get_xthin type=%u hash=%s", inv.type, inv.hash.ToString());
         }
 
@@ -6610,7 +6463,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
             BlockMap::iterator mi = mapBlockIndex.find(inv.hash);
             if (mi == mapBlockIndex.end())
             {
-                Misbehaving(pfrom->GetId(), 100);
+                dosMan.Misbehaving(pfrom->GetId(), 100);
                 return error("Peer %s (%d) requested nonexistent block %s", pfrom->addrName.c_str(), pfrom->id,
                     inv.hash.ToString());
             }
@@ -6645,7 +6498,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
             if (!HandleExpeditedBlock(vRecv, pfrom))
             {
                 LOCK(cs_main);
-                Misbehaving(pfrom->GetId(), 5);
+                dosMan.Misbehaving(pfrom->GetId(), 5);
                 return false;
             }
         }
@@ -6660,7 +6513,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         if (!pfrom->fVerackSent)
         {
             LOCK(cs_main);
-            Misbehaving(pfrom->GetId(), 100);
+            dosMan.Misbehaving(pfrom->GetId(), 100);
             return error("BUVERSION received but we never sent a VERACK message - banning peer=%d version=%s ip=%s",
                 pfrom->GetId(), pfrom->cleanSubVer, pfrom->addrName.c_str());
         }
@@ -6670,7 +6523,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
             pfrom->PushMessage(
                 NetMsgType::REJECT, strCommand, REJECT_DUPLICATE, std::string("Duplicate BU version message"));
             LOCK(cs_main);
-            Misbehaving(pfrom->GetId(), 100);
+            dosMan.Misbehaving(pfrom->GetId(), 100);
             return error("Duplicate BU version message received from peer=%d version=%s ip=%s", pfrom->GetId(),
                 pfrom->cleanSubVer, pfrom->addrName.c_str());
         }
@@ -6686,7 +6539,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         if (!pfrom->fBUVersionSent)
         {
             LOCK(cs_main);
-            Misbehaving(pfrom->GetId(), 100);
+            dosMan.Misbehaving(pfrom->GetId(), 100);
             return error("BUVERACK received but we never sent a BUVERSION message - banning peer=%d version=%s ip=%s",
                 pfrom->GetId(), pfrom->cleanSubVer, pfrom->addrName.c_str());
         }
@@ -6739,9 +6592,6 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
             if (CheckBlockHeader(block, state, true)) // block header is fine
                 SendExpeditedBlock(block, pfrom);
         }
-        // This comes after the check for block header and expedited forwarding, in case this
-        // block is invalid we don't want to remove it from the request manager yet.
-        requester.Received(inv, pfrom, msgSize);
 
         // Message consistency checking
         // NOTE: consistency checking is handled by checkblock() which is called during
@@ -6762,6 +6612,15 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
             LogPrint("net", "Ignoring \"getaddr\" from outbound connection. peer=%d\n", pfrom->id);
             return true;
         }
+
+        // Only send one GetAddr response per connection to reduce resource waste
+        //  and discourage addr stamping of INV announcements.
+        if (pfrom->fSentAddr)
+        {
+            LogPrint("net", "Ignoring repeated \"getaddr\". peer=%d\n", pfrom->id);
+            return true;
+        }
+        pfrom->fSentAddr = true;
 
         pfrom->vAddrToSend.clear();
         std::vector<CAddress> vAddr = addrman.GetAddr();
@@ -6907,7 +6766,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         if (!filter.IsWithinSizeConstraints())
         {
             // There is no excuse for sending a too-large filter
-            Misbehaving(pfrom->GetId(), 100);
+            dosMan.Misbehaving(pfrom->GetId(), 100);
             return false;
         }
         else
@@ -6929,7 +6788,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
         // and thus, the maximum size any matched object can have) in a filteradd message
         if (vData.size() > MAX_SCRIPT_ELEMENT_SIZE)
         {
-            Misbehaving(pfrom->GetId(), 100);
+            dosMan.Misbehaving(pfrom->GetId(), 100);
         }
         else
         {
@@ -6937,7 +6796,7 @@ bool ProcessMessage(CNode *pfrom, std::string strCommand, CDataStream &vRecv, in
             if (pfrom->pfilter)
                 pfrom->pfilter->insert(vData);
             else
-                Misbehaving(pfrom->GetId(), 100);
+                dosMan.Misbehaving(pfrom->GetId(), 100);
         }
     }
 
@@ -7068,7 +6927,7 @@ bool ProcessMessages(CNode *pfrom)
                 pfrom->id, pfrom->addrName.c_str());
             if (!pfrom->fWhitelisted)
             {
-                CNode::Ban(pfrom->addr, BanReasonNodeMisbehaving, 4 * 60 * 60); // ban for 4 hours
+                dosMan.Ban(pfrom->addr, BanReasonNodeMisbehaving, 4 * 60 * 60); // ban for 4 hours
             }
             fOk = false;
             break;
@@ -7283,7 +7142,7 @@ bool SendMessages(CNode *pto)
                     LogPrintf("Warning: not banning local peer %s!\n", pto->addr.ToString());
                 else
                 {
-                    CNode::Ban(pto->addr, BanReasonNodeMisbehaving);
+                    dosMan.Ban(pto->addr, BanReasonNodeMisbehaving);
                 }
             }
             state.fShouldBan = false;
@@ -7302,7 +7161,7 @@ bool SendMessages(CNode *pto)
             (!state.fFirstHeadersReceived) && !pto->fWhitelisted)
         {
             pto->fDisconnect = true;
-            CNode::Ban(pto->addr, BanReasonNodeMisbehaving, 4 * 60 * 60); // ban for 4 hours
+            dosMan.Ban(pto->addr, BanReasonNodeMisbehaving, 4 * 60 * 60); // ban for 4 hours
             LogPrintf(
                 "Banning %s because initial headers were either not received or not received before the timeout\n",
                 pto->addr.ToString());
@@ -7580,9 +7439,7 @@ bool SendMessages(CNode *pto)
             state.nBlocksInFlight < (int)MAX_BLOCKS_IN_TRANSIT_PER_PEER)
         {
             std::vector<CBlockIndex *> vToDownload;
-            NodeId staller = -1;
-            FindNextBlocksToDownload(
-                pto->GetId(), MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight, vToDownload, staller);
+            FindNextBlocksToDownload(pto->GetId(), MAX_BLOCKS_IN_TRANSIT_PER_PEER - state.nBlocksInFlight, vToDownload);
             BOOST_FOREACH (CBlockIndex *pindex, vToDownload)
             {
                 CInv inv(MSG_BLOCK, pindex->GetBlockHash());

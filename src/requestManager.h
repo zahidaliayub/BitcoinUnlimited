@@ -30,8 +30,10 @@ successful receipt, "requester.Rejected(...)" to indicate a bad object (request 
 #include "stat.h"
 // When should I request a tx from someone else (in microseconds). cmdline/bitcoin.conf: -txretryinterval
 extern unsigned int MIN_TX_REQUEST_RETRY_INTERVAL;
+static const unsigned int DEFAULT_MIN_TX_REQUEST_RETRY_INTERVAL = 5 * 1000 * 1000;
 // When should I request a block from someone else (in microseconds). cmdline/bitcoin.conf: -blkretryinterval
 extern unsigned int MIN_BLK_REQUEST_RETRY_INTERVAL;
+static const unsigned int DEFAULT_MIN_BLK_REQUEST_RETRY_INTERVAL = 5 * 1000 * 1000;
 
 // How long in seconds we wait for a xthin request to be fullfilled before disconnecting the node.
 static const unsigned int THINBLOCK_DOWNLOAD_TIMEOUT = 30;
@@ -126,13 +128,13 @@ public:
     void AskFor(const std::vector<CInv> &objArray, CNode *from, unsigned int priority = 0);
 
     // Indicate that we got this object, from and bytes are optional (for node performance tracking)
-    void Received(const CInv &obj, CNode *from = NULL, int bytes = 0);
+    void Received(const CInv &obj, CNode *from, int bytes = 0);
 
     // Indicate that we previously got this object
     void AlreadyReceived(const CInv &obj);
 
     // Indicate that getting this object was rejected
-    void Rejected(const CInv &obj, CNode *from = NULL, unsigned char reason = 0);
+    void Rejected(const CInv &obj, CNode *from, unsigned char reason = 0);
 
     void SendRequests();
 

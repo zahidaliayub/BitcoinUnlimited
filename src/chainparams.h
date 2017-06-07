@@ -34,6 +34,14 @@ struct CCheckpointData {
     double fTransactionsPerDay;
 };
 
+enum
+{
+    DEFAULT_MAINNET_PORT = 8333,
+    DEFAULT_TESTNET_PORT = 18333,
+    DEFAULT_NOLNET_PORT = 9333,
+    DEFAULT_REGTESTNET_PORT = 18444
+};
+
 /**
  * CChainParams defines various tweakable parameters of a given instance of the
  * Bitcoin system. There are three: the main network on which people trade goods
@@ -112,5 +120,9 @@ CChainParams& Params(const std::string& chain);
  * @throws std::runtime_error when the chain is not supported.
  */
 void SelectParams(const std::string& chain);
+
+CBlock CreateGenesisBlock(CScript prefix, const std::string &comment, const CScript& genesisOutputScript,
+                          uint32_t nTime, uint32_t nNonce, uint32_t nBits, int32_t nVersion,
+                          const CAmount& genesisReward);
 
 #endif // BITCOIN_CHAINPARAMS_H

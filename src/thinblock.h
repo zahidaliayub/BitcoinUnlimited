@@ -18,23 +18,6 @@
 class CDataStream;
 class CNode;
 
-
-/**
- Format an amount of bytes with a unit symbol attached, such as MB, KB, GB.
- Uses Kilobytes x1000, not Kibibytes x1024.
-
- Output value has two digits after the dot. No space between unit symbol and
- amount.
-
- Also works for negative amounts. The maximum unit supported is 1 Exabyte (EB).
- This formatting is used by the thinblock statistics functions, and this
- is a factored-out utility function.
-
- @param [value] The value to format
- @return String with unit
- */
-extern std::string formatInfoUnit(double value);
-
 class CThinBlock
 {
 public:
@@ -175,6 +158,7 @@ private:
     std::map<uint256, uint64_t> mapThinBlockTimer;
 
     CCriticalSection cs_thinblockstats; // locks everything below this point
+
     CStatHistory<uint64_t> nOriginalSize;
     CStatHistory<uint64_t> nThinSize;
     CStatHistory<uint64_t> nBlocks;
@@ -190,6 +174,29 @@ private:
     /* The sum total of all bytes for thinblocks currently in process of being reconstructed */
     uint64_t nThinBlockBytes;
 
+    /**
+        Add new entry to statistics array; also removes old timestamps
+        from statistics array using expireStats() below.
+        @param [statsMap] a statistics array
+        @param [value] the value to insert for the current time
+     */
+    template <class T>
+    void updateStats(std::map<int64_t, T> &statsMap, T value);
+
+    /**
+       Expire old statistics in given array (currently after one day).
+       Uses getTimeForStats() virtual method for timing. */
+    template <class T>
+    void expireStats(std::map<int64_t, T> &statsMap);
+
+    /**
+      Calculate average of long long values in given map. Return 0 for no entries.
+      Expires values before calculation. */
+    double average(std::map<int64_t, uint64_t> &map);
+
+protected:
+    //! Virtual method so it can be overridden for better unit testing
+    virtual int64_t getTimeForStats() { return GetTimeMillis(); }
 public:
     void UpdateInBound(uint64_t nThinBlockSize, uint64_t nOriginalBlockSize);
     void UpdateOutBound(uint64_t nThinBlockSize, uint64_t nOriginalBlockSize);
@@ -213,6 +220,7 @@ public:
     void ClearThinBlockTimer(uint256 hash);
 
     void ClearThinBlockData(CNode *pfrom);
+    void ClearThinBlockData(CNode *pfrom, uint256 hash);
 
     uint64_t AddThinBlockBytes(uint64_t, CNode *pfrom);
     void DeleteThinBlockBytes(uint64_t, CNode *pfrom);
@@ -230,8 +238,9 @@ void ConnectToThinBlockNodes();
 void CheckNodeSupportForThinBlocks();
 bool ClearLargestThinBlockAndDisconnect(CNode *pfrom);
 void ClearThinBlockInFlight(CNode *pfrom, uint256 hash);
+void AddThinBlockInFlight(CNode *pfrom, uint256 hash);
 void SendXThinBlock(CBlock &block, CNode *pfrom, const CInv &inv);
-bool IsThinBlockValid(const CNode *pfrom, const std::vector<CTransaction> &vMissingTx, const CBlockHeader &header);
+bool IsThinBlockValid(CNode *pfrom, const std::vector<CTransaction> &vMissingTx, const CBlockHeader &header);
 void BuildSeededBloomFilter(CBloomFilter &memPoolFilter,
     std::vector<uint256> &vOrphanHashes,
     uint256 hash,
