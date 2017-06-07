@@ -6,6 +6,7 @@ from binascii import hexlify, unhexlify
 import time
 from codecs import encode
 from threading import RLock
+from io import BytesIO
 MY_VERSION = 60001  # past bip-31 for ping/pong
 MY_SUBVERSION = b"/python-mininode-tester:0.0.3/"
 
@@ -266,6 +267,7 @@ class CAddress(object):
         self.pchReserved = f.read(12)
         self.ip = socket.inet_ntoa(f.read(4))
         self.port = struct.unpack(">H", f.read(2))[0]
+        return self
 
     def serialize(self):
         r = b""
@@ -302,6 +304,7 @@ class CInv(object):
     def deserialize(self, f):
         self.type = struct.unpack("<i", f.read(4))[0]
         self.hash = deser_uint256(f)
+        return self
 
     def serialize(self):
         r = b""
@@ -322,6 +325,7 @@ class CBlockLocator(object):
     def deserialize(self, f):
         self.nVersion = struct.unpack("<i", f.read(4))[0]
         self.vHave = deser_uint256_vector(f)
+        return self
 
     def serialize(self):
         r = b""
@@ -336,12 +340,14 @@ class CBlockLocator(object):
 
 class COutPoint(object):
     def __init__(self, hash=0, n=0):
+        assert(type(hash) == int)
         self.hash = hash
         self.n = n
 
     def deserialize(self, f):
         self.hash = deser_uint256(f)
         self.n = struct.unpack("<I", f.read(4))[0]
+        return self
 
     def serialize(self):
         r = b""
@@ -354,7 +360,7 @@ class COutPoint(object):
 
 
 class CTxIn(object):
-    def __init__(self, outpoint=None, scriptSig=b"", nSequence=0):
+    def __init__(self, outpoint=None, scriptSig=b"", nSequence=0xffffffff):
         if outpoint is None:
             self.prevout = COutPoint()
         else:
@@ -367,6 +373,7 @@ class CTxIn(object):
         self.prevout.deserialize(f)
         self.scriptSig = deser_string(f)
         self.nSequence = struct.unpack("<I", f.read(4))[0]
+        return self
 
     def serialize(self):
         r = b""
@@ -374,6 +381,9 @@ class CTxIn(object):
         r += ser_string(self.scriptSig)
         r += struct.pack("<I", self.nSequence)
         return r
+
+    def is_final(self):
+        return (self.nSequence == 0xffffffff)
 
     def __repr__(self):
         return "CTxIn(prevout=%s scriptSig=%s nSequence=%i)" \
@@ -389,12 +399,17 @@ class CTxOut(object):
     def deserialize(self, f):
         self.nValue = struct.unpack("<q", f.read(8))[0]
         self.scriptPubKey = deser_string(f)
+        return self
 
     def serialize(self):
         r = b""
         r += struct.pack("<q", int(self.nValue))
         r += ser_string(self.scriptPubKey)
         return r
+
+    def getHash(self):
+        t = self.serialize()
+        return hash256(t)
 
     def __repr__(self):
         return "CTxOut(nValue=%i.%08i scriptPubKey=%s)" \
@@ -420,12 +435,17 @@ class CTransaction(object):
             self.hash = None
 
     def deserialize(self, f):
+        if type(f) is str:
+            f = unhexlify(f)
+        if type(f) is bytes:
+            f = BytesIO(f)
         self.nVersion = struct.unpack("<i", f.read(4))[0]
         self.vin = deser_vector(f, CTxIn)
         self.vout = deser_vector(f, CTxOut)
         self.nLockTime = struct.unpack("<I", f.read(4))[0]
         self.sha256 = None
         self.hash = None
+        return self
 
     def serialize(self):
         r = b""
@@ -501,6 +521,7 @@ class CBlockHeader(object):
         self.nNonce = struct.unpack("<I", f.read(4))[0]
         self.sha256 = None
         self.hash = None
+        return self
 
     def serialize(self):
         r = b""
@@ -558,6 +579,7 @@ class CBlock(CBlockHeader):
     def deserialize(self, f):
         super(CBlock, self).deserialize(f)
         self.vtx = deser_vector(f, CTransaction)
+        return self
 
     def serialize(self):
         r = b""
@@ -640,6 +662,7 @@ class CUnsignedAlert(object):
         self.strComment = deser_string(f)
         self.strStatusBar = deser_string(f)
         self.strReserved = deser_string(f)
+        return self
 
     def serialize(self):
         r = b""
@@ -673,6 +696,7 @@ class CAlert(object):
     def deserialize(self, f):
         self.vchMsg = deser_string(f)
         self.vchSig = deser_string(f)
+        return self
 
     def serialize(self):
         r = b""
@@ -721,6 +745,7 @@ class msg_version(object):
             self.nNonce = None
             self.strSubVer = None
             self.nStartingHeight = None
+        return self
 
     def serialize(self):
         r = b""
@@ -748,7 +773,7 @@ class msg_verack(object):
         pass
 
     def deserialize(self, f):
-        pass
+        return self
 
     def serialize(self):
         return b""
@@ -765,6 +790,7 @@ class msg_addr(object):
 
     def deserialize(self, f):
         self.addrs = deser_vector(f, CAddress)
+        return self
 
     def serialize(self):
         return ser_vector(self.addrs)
@@ -782,6 +808,7 @@ class msg_alert(object):
     def deserialize(self, f):
         self.alert = CAlert()
         self.alert.deserialize(f)
+        return self
 
     def serialize(self):
         r = b""
@@ -803,6 +830,7 @@ class msg_inv(object):
 
     def deserialize(self, f):
         self.inv = deser_vector(f, CInv)
+        return self
 
     def serialize(self):
         return ser_vector(self.inv)
@@ -824,6 +852,7 @@ class msg_getdata(object):
 
     def deserialize(self, f):
         self.inv = deser_vector(f, CInv)
+        return self
 
     def serialize(self):
         return ser_vector(self.inv)
@@ -843,6 +872,7 @@ class msg_getblocks(object):
         self.locator = CBlockLocator()
         self.locator.deserialize(f)
         self.hashstop = deser_uint256(f)
+        return self
 
     def serialize(self):
         r = b""
@@ -863,6 +893,7 @@ class msg_tx(object):
 
     def deserialize(self, f):
         self.tx.deserialize(f)
+        return self
 
     def serialize(self):
         return self.tx.serialize()
@@ -882,6 +913,7 @@ class msg_block(object):
 
     def deserialize(self, f):
         self.block.deserialize(f)
+        return self
 
     def serialize(self):
         return self.block.serialize()
@@ -900,7 +932,7 @@ class msg_getaddr(object):
         pass
 
     def deserialize(self, f):
-        pass
+        return self
 
     def serialize(self):
         return b""
@@ -916,7 +948,7 @@ class msg_ping_prebip31(object):
         pass
 
     def deserialize(self, f):
-        pass
+        return self
 
     def serialize(self):
         return b""
@@ -933,6 +965,7 @@ class msg_ping(object):
 
     def deserialize(self, f):
         self.nonce = struct.unpack("<Q", f.read(8))[0]
+        return self
 
     def serialize(self):
         r = b""
@@ -951,6 +984,7 @@ class msg_pong(object):
 
     def deserialize(self, f):
         self.nonce = struct.unpack("<Q", f.read(8))[0]
+        return self
 
     def serialize(self):
         r = b""
@@ -968,7 +1002,7 @@ class msg_mempool(object):
         pass
 
     def deserialize(self, f):
-        pass
+        return self
 
     def serialize(self):
         return b""
@@ -984,15 +1018,13 @@ class msg_sendheaders(object):
         pass
 
     def deserialize(self, f):
-        pass
+        return self
 
     def serialize(self):
         return b""
 
     def __repr__(self):
         return "msg_sendheaders()"
-
-
 
 class msg_getheaders(object):
     """
@@ -1010,6 +1042,7 @@ class msg_getheaders(object):
         self.locator = CBlockLocator()
         self.locator.deserialize(f)
         self.hashstop = deser_uint256(f)
+        return self
 
     def serialize(self):
         r = b""
@@ -1037,6 +1070,7 @@ class msg_headers(object):
         blocks = deser_vector(f, CBlock)
         for x in blocks:
             self.headers.append(CBlockHeader(x))
+        return self
 
     def serialize(self):
         blocks = [CBlock(x) for x in self.headers]
@@ -1063,6 +1097,7 @@ class msg_reject(object):
         if (self.code != self.REJECT_MALFORMED and
                 (self.message == b"block" or self.message == b"tx")):
             self.data = deser_uint256(f)
+        return self
 
     def serialize(self):
         r = ser_string(self.message)
@@ -1077,7 +1112,19 @@ class msg_reject(object):
         return "msg_reject: %s %d %s [%064x]" \
             % (self.message, self.code, self.reason, self.data)
 
+# Helper function
+def wait_until(predicate, attempts=float('inf'), timeout=float('inf')):
+    attempt = 0
+    elapsed = 0
 
+    while attempt < attempts and elapsed < timeout:
+        with mininode_lock:
+            if predicate():
+                return True
+        attempt += 1
+        elapsed += 0.05
+        time.sleep(0.05)
+    return False
 
 def Test():
     import doctest

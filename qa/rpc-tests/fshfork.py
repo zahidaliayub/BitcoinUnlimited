@@ -370,18 +370,35 @@ class FshBackingUtxoSet:
 
 class FshCommitmentDb:
     """This class tracks all the FSH commitment transactions (its the SPV of FSH blocks)"""
-    def __init__(self,):
+    def __init__(self, dbfile):
+        self.dbfile = dbfile
+        self.db = leveldb.LevelDB(dbfile)
+    def insert(self):
         pass
+
+class FshCommitmentRamDb:
+    """This class tracks all the FSH commitment transactions (its the SPV of FSH blocks)"""
+    def __init__(self, dbfile):
+        self.dbfile = dbfile
+        self.db = {}
+
+    def insert(self,fshblock, tx):
+        self.db[fshblock] = tx
 
 
 class FshExtensionBlockChain:
-    def __init__(self, depositAddress, backingAddress):
+    def __init__(self, depositAddress, backingAddress, dbdir=None):
         self.backingAddress = regularizeBitcoinAddress(backingAddress)
         self.depositAddress = regularizeBitcoinAddress(depositAddress)
         self.pendingInflows = [] # transactions that are incoming
         self.backingUtxos = FshBackingUtxoSet()
 
-        self.fshCommitmentTx = FshCommitmentDb()  # all the fsh transactions that have been on the bitcoin blockchain
+        if dbdir:
+            self.dbdir = dbdir
+            commitDbFile = os.path.join(self.dbdir,"commitments.db")
+            self.fshCommitmentTx = FshCommitmentDb(commitDbFile)  # all the fsh transactions that have been on the bitcoin blockchain
+        else:
+            self.fshCommitmentTx = FshCommitmentRamDb()
 
     def acceptBitcoinBlock(self, block, ptx):
         """Parses the bitcoin block, extracting what is interesting to the FSH extension blocks"""
@@ -397,9 +414,11 @@ class FshExtensionBlockChain:
                 tx.append(tmptx)
 
         for t in tx:
+            fshBlockHash = None
             if t.vout[FshBitcoinTxn.FSH_BLOCK_TXO_IDX].nValue == 0:  # for any tx relevant to the FSH ext blocks, vout[0]'s value is 0
                 # TODO: validate that this tx is signed by the backingAddress
                 scr = CScript(t.vout[FshBitcoinTxn.FSH_BLOCK_TXO_IDX].scriptPubKey)
+                fshBlockHash = hexlify(list(scr)[1])
                 print ("FSH block hash: ", hexlify(list(scr)[1]))
                 for op in scr:
                     print(op)
@@ -416,6 +435,8 @@ class FshExtensionBlockChain:
                     if not isinstance(op, CScriptOp):
                         print("as hex: " + str(hexlify(op)))
                         print("as addr: " +  str(P2PKHBitcoinAddress.from_bytes(op)))
+            if fshBlockHash:
+                fshCommitmentTx.insert(fshBlockHash, t)
 
 
 #     CONTINUITY_TXO_IDX = 1
@@ -533,7 +554,7 @@ class TestClass(BitcoinTestFramework):
                 txdata = node.gettransaction(txhash)
                 txList.append(txdata["hex"])
             fbc.acceptBitcoinBlock(blockInfo,txList)
-        
+
         pdb.set_trace()
 
 
@@ -555,7 +576,7 @@ class TestClass(BitcoinTestFramework):
         wallet = node.listunspent()
         wallet.sort(key=lambda x: x["amount"], reverse=True)
         self.fshTest(wallet[1], node)
-        
+
         txidNum = uint256_from_str(lx(wallet[0]["txid"]))
         txin = CTxIn(COutPoint(txidNum,int(wallet[0]["vout"])))
         txin.nSequence = 0
