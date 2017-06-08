@@ -44,6 +44,9 @@ def lx(h):
 
 def dataTxo(data, txo=None):
     """Adds creates an empty output with data, or appends data onto an existing one"""
+
+    assert(type(data) == bytes)
+
     if txo is None:
         txo = CTxOut(0, CScript([OP_RETURN]))
     elif isinstance(txo, CScript):
@@ -55,17 +58,18 @@ def dataTxo(data, txo=None):
 
     commitScript = txo.scriptPubKey
 
-    if len(data) == 0:
+    if 0:  # already done by commitScript += data
+        if len(data) == 0:
             pass
-    elif len(data) < 75:
+        elif len(data) < 75:
             commitScript += CScriptOp(len(data))
-    elif len(data) < 256:
+        elif len(data) < 256:
             commitScript += OP_PUSHDATA1
             commitScript += len(data)
-    elif len(data) < 0x10000:
+        elif len(data) < 0x10000:
             commitScript += OP_PUSHDATA2
             commitScript += len(data)
-    else:
+        else:
             commitScript += OP_PUSHDATA4
             commitScript += len(data)
 
@@ -156,6 +160,10 @@ def regularizeBitcoinAddress(obj):
 class IllegalArgumentTypeError(TypeError):
     pass
 
+class Error(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+
 class FshBlock():
     """Extension block"""
     def __init__(self,parent = None):
@@ -228,6 +236,8 @@ class FshBitcoinTxn(CTransaction):
     GENESIS_TXO_IDX = 2
     CONTINUITY_TXO_IDX = 1
     FSH_BLOCK_TXO_IDX = 0
+
+    EXT_BLOCK_HASH_SCRIPT_IDX = 1
     def __init__(self):
         super(FshBitcoinTxn, self).__init__()
 
@@ -244,6 +254,9 @@ class FshBitcoinTxn(CTransaction):
         return COutPoint(self.txHash, self.CONTINUITY_TXO_IDX)
 
 class FshGenesisTxn(FshBitcoinTxn):
+    DEPOSIT_ADDRESS_SCRIPT_IDX = 1
+    BACKING_ADDRESS_SCRIPT_IDX = 2
+
     def __init__(self, docOrCommitment, fshGenesisBlock, utxoInput, depositAddress, backingAddress, change, continuityAmt=CONTINUITY_AMT, feePerKb = 0):
         """
         docOrCommitment: a hash or string of the extension block contract
@@ -375,15 +388,22 @@ class FshCommitmentDb:
         self.db = leveldb.LevelDB(dbfile)
     def insert(self):
         pass
+    def insertGenesis(self,fshblock, tx):
+        pass
 
 class FshCommitmentRamDb:
     """This class tracks all the FSH commitment transactions (its the SPV of FSH blocks)"""
-    def __init__(self, dbfile):
-        self.dbfile = dbfile
+    def __init__(self):
         self.db = {}
+        self.genesisBlockHash = None
+        self.genesisTx = None
 
     def insert(self,fshblock, tx):
         self.db[fshblock] = tx
+
+    def insertGenesis(self,fshblock, tx):
+        self.genesisBlockHash = fshblock
+        self.genesisTx = tx
 
 
 class FshExtensionBlockChain:
@@ -415,32 +435,49 @@ class FshExtensionBlockChain:
 
         for t in tx:
             fshBlockHash = None
+            # Is this a FSH block transaction?
             if t.vout[FshBitcoinTxn.FSH_BLOCK_TXO_IDX].nValue == 0:  # for any tx relevant to the FSH ext blocks, vout[0]'s value is 0
                 # TODO: validate that this tx is signed by the backingAddress
+
+                # extract the first extension block hash
                 scr = CScript(t.vout[FshBitcoinTxn.FSH_BLOCK_TXO_IDX].scriptPubKey)
-                fshBlockHash = hexlify(list(scr)[1])
+                fshBlockHash = list(scr)[FshBitcoinTxn.EXT_BLOCK_HASH_SCRIPT_IDX]
                 print ("FSH block hash: ", hexlify(list(scr)[1]))
                 for op in scr:
                     print(op)
                     if not isinstance(op, CScriptOp):
                         print(hexlify(op))
+
+                # extract the continuity address
                 scr = CScript(t.vout[FshBitcoinTxn.CONTINUITY_TXO_IDX].scriptPubKey)
                 continuityAddr = CBitcoinAddress.from_scriptPubKey(scr)
                 print("Continuity Addr: " + str(continuityAddr))
-            if len(t.vout) > FshBitcoinTxn.GENESIS_TXO_IDX and t.vout[FshBitcoinTxn.GENESIS_TXO_IDX].nValue == 0:  # this is the genesis transaction
-                pdb.set_trace()
-                scr = CScript(t.vout[FshBitcoinTxn.FSH_BLOCK_TXO_IDX].scriptPubKey)
-                for op in scr:
-                    print(op)
-                    if not isinstance(op, CScriptOp):
-                        print("as hex: " + str(hexlify(op)))
-                        print("as addr: " +  str(P2PKHBitcoinAddress.from_bytes(op)))
+
+                # Is this the genesis transaction?
+                if len(t.vout) > FshBitcoinTxn.GENESIS_TXO_IDX and t.vout[FshBitcoinTxn.GENESIS_TXO_IDX].nValue == 0:
+                    scr = CScript(t.vout[FshBitcoinTxn.GENESIS_TXO_IDX].scriptPubKey)
+                    lst = list(scr)
+
+                    # Extract the deposit and backing addresses from this transaction, and validate them if addresses were supplied
+                    # otherwise set the appropriate class attribute
+                    depositAddress = P2PKHBitcoinAddress.from_bytes(lst[FshGenesisTxn.DEPOSIT_ADDRESS_SCRIPT_IDX])
+                    if self.depositAddress:
+                        if self.depositAddress != depositAddress:
+                            raise Error("Genesis block deposit address %s does not match passed deposit address %s" % (depositAddress,self.depositAddress))
+                    else:
+                        self.depositAddress = depositAddress
+                    backingAddress = P2PKHBitcoinAddress.from_bytes(lst[FshGenesisTxn.BACKING_ADDRESS_SCRIPT_IDX])
+                    if self.backingAddress:
+                        if self.backingAddress != backingAddress:
+                            raise Error("Genesis block backing address %s does not match passed backing address %s" % (backingAddress,self.backingAddress))
+                    else:
+                        self.depositAddress = depositAddress
+
+                    self.fshCommitmentTx.insertGenesis(fshBlockHash, t)
+
             if fshBlockHash:
-                fshCommitmentTx.insert(fshBlockHash, t)
+                self.fshCommitmentTx.insert(fshBlockHash, t)
 
-
-#     CONTINUITY_TXO_IDX = 1
-        pdb.set_trace()
 
         pass
 
@@ -547,7 +584,6 @@ class TestClass(BitcoinTestFramework):
 
         fbc = FshExtensionBlockChain(fshDepositAddr, fshBackingAddr)
         for b in blocks:
-            pdb.set_trace()
             blockInfo = node.getblock(b)
             txList = []
             for txhash in blockInfo['tx']:
