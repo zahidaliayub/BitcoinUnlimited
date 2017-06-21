@@ -19,6 +19,7 @@ import ctypes
 import ctypes.util
 import hashlib
 import sys
+from io import BytesIO
 
 _bchr = chr
 _bord = ord
@@ -190,20 +191,139 @@ _NID_secp256k1 = 714 # from openssl/obj_mac.h
 # test that OpenSSL supports secp256k1
 _ssl.EC_KEY_new_by_curve_name(_NID_secp256k1)
 
+class SerializationError(Exception):
+    """Base class for serialization errors"""
+
+
+class SerializationTruncationError(SerializationError):
+    """Serialized data was truncated
+
+    Thrown by deserialize() and stream_deserialize()
+    """
+
+class DeserializationExtraDataError(SerializationError):
+    """Deserialized data had extra data at the end
+
+    Thrown by deserialize() when not all data is consumed during
+    deserialization. The deserialized object and extra padding not consumed are
+    saved.
+    """
+    def __init__(self, msg, obj, padding):
+        super(DeserializationExtraDataError, self).__init__(msg)
+        self.obj = obj
+        self.padding = padding
+
+MAX_SIZE = 0x02000000
+def ser_read(f, n):
+    """Read from a stream safely
+
+    Raises SerializationError and SerializationTruncationError appropriately.
+    Use this instead of f.read() in your classes stream_(de)serialization()
+    functions.
+    """
+    if n > MAX_SIZE:
+        raise SerializationError('Asked to read 0x%x bytes; MAX_SIZE exceeded' % n)
+    r = f.read(n)
+    if len(r) < n:
+        raise SerializationTruncationError('Asked to read %i bytes, but only got %i' % (n, len(r)))
+    return r
+
+class Serializer(object):
+    """Base class for object serializers"""
+    def __new__(cls):
+        raise NotImplementedError
+
+    @classmethod
+    def stream_serialize(cls, obj, f):
+        raise NotImplementedError
+    @classmethod
+    def stream_deserialize(cls, f):
+        raise NotImplementedError
+
+    @classmethod
+    def serialize(cls, obj):
+        f = _BytesIO()
+        cls.stream_serialize(obj, f)
+        return f.getvalue()
+
+    @classmethod
+    def deserialize(cls, buf):
+        return cls.stream_deserialize(_BytesIO(buf))
+
+class VarIntSerializer(Serializer):
+    """Serialization of variable length ints"""
+    @classmethod
+    def stream_serialize(cls, i, f):
+        if i < 0:
+            raise ValueError('varint must be non-negative integer')
+        elif i < 0xfd:
+            f.write(_bchr(i))
+        elif i <= 0xffff:
+            f.write(_bchr(0xfd))
+            f.write(struct.pack(b'<H', i))
+        elif i <= 0xffffffff:
+            f.write(_bchr(0xfe))
+            f.write(struct.pack(b'<I', i))
+        else:
+            f.write(_bchr(0xff))
+            f.write(struct.pack(b'<Q', i))
+
+    @classmethod
+    def stream_deserialize(cls, f):
+        r = ord(ser_read(f, 1))
+        if r < 0xfd:
+            return r
+        elif r == 0xfd:
+            return struct.unpack(b'<H', ser_read(f, 2))[0]
+        elif r == 0xfe:
+            return struct.unpack(b'<I', ser_read(f, 4))[0]
+        else:
+            return struct.unpack(b'<Q', ser_read(f, 8))[0]
+
+class BytesSerializer(Serializer):
+    """Serialization of bytes instances"""
+    @classmethod
+    def stream_serialize(cls, b, f):
+        VarIntSerializer.stream_serialize(len(b), f)
+        f.write(b)
+
+    @classmethod
+    def stream_deserialize(cls, f):
+        l = VarIntSerializer.stream_deserialize(f)
+        return ser_read(f, l)
+
+
 class DERSignature(object):
     __slots__ = ['length', 'r', 's']
 
     def __init__(self, r, s, length):
-        
         object.__setattr__(self, 'r', r)
         object.__setattr__(self, 's', s)
         object.__setattr__(self, 'length', length)
 
     @classmethod
+    def deserialize(cls, buf, allow_padding=False):
+        """Deserialize bytes, returning an instance
+
+        allow_padding - Allow buf to include extra padding. (default False)
+
+        If allow_padding is False and not all bytes are consumed during
+        deserialization DeserializationExtraDataError will be raised.
+        """
+        fd = BytesIO(buf)
+        r = cls.stream_deserialize(fd)
+        if not allow_padding:
+            padding = fd.read()
+            if len(padding) != 0:
+                raise DeserializationExtraDataError('Not all bytes consumed during deserialization',
+                                                    r, padding)
+        return r
+
+    @classmethod
     def stream_deserialize(cls, f):
         assert ser_read(f, 1) == b"\x30"
         rs = BytesSerializer.stream_deserialize(f)
-        f = _BytesIO(rs)
+        f = BytesIO(rs)
         assert ser_read(f, 1) == b"\x02"
         r = BytesSerializer.stream_deserialize(f)
         assert ser_read(f, 1) == b"\x02"
@@ -221,7 +341,7 @@ class DERSignature(object):
 
     def stream_serialize(self, f):
         f.write(self.serialize())
-        
+
 #        f.write(b"\x30")
 #        f.write(b"\x02")
 #        BytesSerializer.stream_serialize(self.r, f)
@@ -587,6 +707,9 @@ class CPubKey(bytes):
             return '%s(%s)' % (self.__class__.__name__, super(CPubKey, self).__repr__())
         else:
             return '%s(b%s)' % (self.__class__.__name__, super(CPubKey, self).__repr__())
+
+    def serialize(self):
+        return self
 
     def getP2PKHAddress(self):
         """Get pay to public key hash address

@@ -964,6 +964,85 @@ def IsLowDERSignature(sig):
     return CompareBigEndian(s_val, [0]) > 0 and \
       CompareBigEndian(s_val, max_mod_half_order) <= 0
 
+def CompareBigEndian(c1, c2):
+    """
+    Loosely matches CompareBigEndian() from eccryptoverify.cpp
+    Compares two arrays of bytes, and returns a negative value if the first is
+    less than the second, 0 if they're equal, and a positive value if the
+    first is greater than the second.
+    """
+    c1 = list(c1)
+    c2 = list(c2)
+
+    # Adjust starting positions until remaining lengths of the two arrays match
+    while len(c1) > len(c2):
+        if c1.pop(0) > 0:
+            return 1
+    while len(c2) > len(c1):
+        if c2.pop(0) > 0:
+            return -1
+
+    while len(c1) > 0:
+        diff = c1.pop(0) - c2.pop(0)
+        if diff != 0:
+            return diff
+
+    return 0
+
+
+def RawSignatureHash(script, txTo, inIdx, hashtype):
+    """Consensus-correct SignatureHash
+
+    Returns (hash, err) to precisely match the consensus-critical behavior of
+    the SIGHASH_SINGLE bug. (inIdx is *not* checked for validity)
+
+    If you're just writing wallet software you probably want SignatureHash()
+    instead.
+    """
+    HASH_ONE = b'\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+
+    if inIdx >= len(txTo.vin):
+        return (HASH_ONE, "inIdx %d out of range (%d)" % (inIdx, len(txTo.vin)))
+    txtmp = bitcoin.core.CMutableTransaction.from_tx(txTo)
+
+    for txin in txtmp.vin:
+        txin.scriptSig = b''
+    txtmp.vin[inIdx].scriptSig = FindAndDelete(script, CScript([OP_CODESEPARATOR]))
+
+    if (hashtype & 0x1f) == SIGHASH_NONE:
+        txtmp.vout = []
+
+        for i in range(len(txtmp.vin)):
+            if i != inIdx:
+                txtmp.vin[i].nSequence = 0
+
+    elif (hashtype & 0x1f) == SIGHASH_SINGLE:
+        outIdx = inIdx
+        if outIdx >= len(txtmp.vout):
+            return (HASH_ONE, "outIdx %d out of range (%d)" % (outIdx, len(txtmp.vout)))
+
+        tmp = txtmp.vout[outIdx]
+        txtmp.vout = []
+        for i in range(outIdx):
+            txtmp.vout.append(bitcoin.core.CTxOut())
+        txtmp.vout.append(tmp)
+
+        for i in range(len(txtmp.vin)):
+            if i != inIdx:
+                txtmp.vin[i].nSequence = 0
+
+    if hashtype & SIGHASH_ANYONECANPAY:
+        tmp = txtmp.vin[inIdx]
+        txtmp.vin = []
+        txtmp.vin.append(tmp)
+
+    s = txtmp.serialize()
+    s += struct.pack(b"<I", hashtype)
+
+    hash = bitcoin.core.Hash(s)
+
+    return (hash, None)
+
 def SignatureHash(script, txTo, inIdx, hashtype):
     """Consensus-correct SignatureHash
 
