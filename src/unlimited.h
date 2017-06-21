@@ -13,7 +13,6 @@
 #include "consensus/validation.h"
 #include "leakybucket.h"
 #include "net.h"
-#include "requestManager.h"
 #include "script/script_error.h"
 #include "stat.h"
 #include "thinblock.h"
@@ -44,6 +43,7 @@ class CBlockIndex;
 class CValidationState;
 struct CDiskBlockPos;
 class CNode;
+class CNodeRef;
 class CChainParams;
 
 
@@ -84,7 +84,7 @@ int32_t UnlimitedComputeBlockVersion(const CBlockIndex *pindexPrev, const Consen
 // The function also allows * or ? wildcards.
 // This is useful for the RPC calls.
 // Returns the first node that matches.
-extern CNode *FindLikelyNode(const std::string &addrName);
+extern CNodeRef FindLikelyNode(const std::string &addrName);
 
 // Convert the BUComments to the string client's "subversion" string
 extern void settingsToUserAgentString();

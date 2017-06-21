@@ -28,6 +28,15 @@ public:
 public:
     CThinBlock(const CBlock &block, CBloomFilter &filter);
     CThinBlock() {}
+    /**
+     * Handle an incoming thin block.  The block is fully validated, and if any transactions are missing, we fall
+     * back to requesting a full block.
+     * @param[in] vRecv        The raw binary message
+     * @param[in] pFrom        The node the message was from
+     * @return True if handling succeeded
+     */
+    static bool HandleMessage(CDataStream &vRecv, CNode *pfrom);
+
     ADD_SERIALIZE_METHODS;
 
     template <typename Stream, typename Operation>
@@ -39,7 +48,7 @@ public:
     }
 
     CInv GetInv() { return CInv(MSG_BLOCK, header.GetHash()); }
-    bool process(CNode *pfrom, int nSizeThinBlock, std::string strCommand);
+    bool process(CNode *pfrom, int nSizeThinBlock);
 };
 
 class CXThinBlock
@@ -81,9 +90,8 @@ public:
     bool CheckBlockHeader(const CBlockHeader &block, CValidationState &state);
 };
 
-// This class is used for retrieving a list of still missing transactions after receiving a "thinblock" message.
-// The CXThinBlockTx when recieved can be used to fill in the missing transactions after which it is sent
-// back to the requestor.  This class uses a 64bit hash as opposed to the normal 256bit hash.
+// This class is used to respond to requests for missing transactions after sending an XThin block.
+// It is filled with the requested transactions in order.
 class CXThinBlockTx
 {
 public:
@@ -94,6 +102,14 @@ public:
 public:
     CXThinBlockTx(uint256 blockHash, std::vector<CTransaction> &vTx);
     CXThinBlockTx() {}
+    /**
+     * Handle receiving a list of missing xthin block transactions from a prior request
+     * @param[in] vRecv        The raw binary message
+     * @param[in] pFrom        The node the message was from
+     * @return True if handling succeeded
+     */
+    static bool HandleMessage(CDataStream &vRecv, CNode *pfrom);
+
     ADD_SERIALIZE_METHODS;
 
     template <typename Stream, typename Operation>
@@ -103,9 +119,10 @@ public:
         READWRITE(vMissingTx);
     }
 };
-// This class is used for retrieving a list of still missing transactions after receiving a "thinblock" message.
-// The CXThinBlockTx when recieved can be used to fill in the missing transactions after which it is sent
-// back to the requestor.  This class uses a 64bit hash as opposed to the normal 256bit hash.
+
+// This class is used for requests for still missing transactions after processing a "thinblock" message.
+// This class uses a 64bit hash as opposed to the normal 256bit hash.  The target is expected to reply with
+// a serialized CXThinBlockTx response message.
 class CXRequestThinBlockTx
 {
 public:
@@ -116,6 +133,13 @@ public:
 public:
     CXRequestThinBlockTx(uint256 blockHash, std::set<uint64_t> &setHashesToRequest);
     CXRequestThinBlockTx() {}
+    /**
+     * Handle an incoming request for missing xthin block transactions
+     * @param[in] vRecv        The raw binary message
+     * @param[in] pFrom        The node the message was from
+     * @return True if handling succeeded
+     */
+    static bool HandleMessage(CDataStream &vRecv, CNode *pfrom);
     ADD_SERIALIZE_METHODS;
 
     template <typename Stream, typename Operation>
@@ -130,10 +154,11 @@ public:
 class CThinBlockData
 {
 private:
-    CCriticalSection cs_mapThinBlockTimer;
+    CCriticalSection cs_mapThinBlockTimer; // locks mapThinBlockTimer
     std::map<uint256, uint64_t> mapThinBlockTimer;
 
-    CCriticalSection cs_thinblockstats;
+    CCriticalSection cs_thinblockstats; // locks everything below this point
+
     CStatHistory<uint64_t> nOriginalSize;
     CStatHistory<uint64_t> nThinSize;
     CStatHistory<uint64_t> nBlocks;
@@ -146,7 +171,32 @@ private:
     std::map<int64_t, double> mapThinBlockResponseTime;
     std::map<int64_t, double> mapThinBlockValidationTime;
     std::map<int64_t, int> mapThinBlocksInBoundReRequestedTx;
+    /* The sum total of all bytes for thinblocks currently in process of being reconstructed */
+    uint64_t nThinBlockBytes;
 
+    /**
+        Add new entry to statistics array; also removes old timestamps
+        from statistics array using expireStats() below.
+        @param [statsMap] a statistics array
+        @param [value] the value to insert for the current time
+     */
+    template <class T>
+    void updateStats(std::map<int64_t, T> &statsMap, T value);
+
+    /**
+       Expire old statistics in given array (currently after one day).
+       Uses getTimeForStats() virtual method for timing. */
+    template <class T>
+    void expireStats(std::map<int64_t, T> &statsMap);
+
+    /**
+      Calculate average of long long values in given map. Return 0 for no entries.
+      Expires values before calculation. */
+    double average(std::map<int64_t, uint64_t> &map);
+
+protected:
+    //! Virtual method so it can be overridden for better unit testing
+    virtual int64_t getTimeForStats() { return GetTimeMillis(); }
 public:
     void UpdateInBound(uint64_t nThinBlockSize, uint64_t nOriginalBlockSize);
     void UpdateOutBound(uint64_t nThinBlockSize, uint64_t nOriginalBlockSize);
@@ -168,6 +218,14 @@ public:
 
     bool CheckThinblockTimer(uint256 hash);
     void ClearThinBlockTimer(uint256 hash);
+
+    void ClearThinBlockData(CNode *pfrom);
+    void ClearThinBlockData(CNode *pfrom, uint256 hash);
+
+    uint64_t AddThinBlockBytes(uint64_t, CNode *pfrom);
+    void DeleteThinBlockBytes(uint64_t, CNode *pfrom);
+    void ResetThinBlockBytes();
+    uint64_t GetThinBlockBytes();
 };
 extern CThinBlockData thindata; // Singleton class
 
@@ -178,8 +236,11 @@ bool IsThinBlocksEnabled();
 bool CanThinBlockBeDownloaded(CNode *pto);
 void ConnectToThinBlockNodes();
 void CheckNodeSupportForThinBlocks();
+bool ClearLargestThinBlockAndDisconnect(CNode *pfrom);
+void ClearThinBlockInFlight(CNode *pfrom, uint256 hash);
+void AddThinBlockInFlight(CNode *pfrom, uint256 hash);
 void SendXThinBlock(CBlock &block, CNode *pfrom, const CInv &inv);
-bool IsThinBlockValid(const CNode *pfrom, const std::vector<CTransaction> &vMissingTx, const CBlockHeader &header);
+bool IsThinBlockValid(CNode *pfrom, const std::vector<CTransaction> &vMissingTx, const CBlockHeader &header);
 void BuildSeededBloomFilter(CBloomFilter &memPoolFilter,
     std::vector<uint256> &vOrphanHashes,
     uint256 hash,

@@ -41,6 +41,9 @@ import pdb
 from .nodemessages import *
 from .bumessages import *
 
+from .nodemessages import *
+from .bumessages import *
+
 BIP0031_VERSION = 60000
 
 MAX_INV_SZ = 50000
@@ -275,7 +278,6 @@ class NodeConn(asyncore.dispatcher):
         ret = []
         ann = MsgAnnotater()
         self.cb = type("", (), {"deliver": lambda self, conn, msg: ret.append(ann.annotate(msg, conn))})()
-        # self.cb = type("", (), {"deliver": lambda conn,msg,lst=ret: [print(msg), ret.append(msg) })()
         self.inject_data(buffer)
         self.cp = tmp
         return ret
@@ -354,12 +356,12 @@ class NodeConn(asyncore.dispatcher):
                     print("Unknown command: '" + str(command) + "' ")
                     self.show_debug_msg("Unknown command: '" + str(command) + "' " +
                                         repr(msg))
-                    pdb.set_trace()
+                    # pdb.set_trace()
         except Exception as e:
             print('got_data:', repr(e))
-            import traceback
-            traceback.print_tb(sys.exc_info()[2])
-            pdb.post_mortem(e.__traceback__)
+            #import traceback
+            #traceback.print_tb(sys.exc_info()[2])
+            #pdb.post_mortem(e.__traceback__)
 
     def send_message(self, message, pushbuf=False):
         if self.state != "connected" and not pushbuf:
