@@ -132,9 +132,6 @@ class TestClass(BitcoinTestFramework):
 
 
     def run_test(self):
-        # Receive a block of all types
-
-        # I need to create a nontrivial block so thin and xthin saves space.
 
         # first create addrs
         # self.nodes[0].keypoolrefill(100)

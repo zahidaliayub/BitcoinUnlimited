@@ -17,12 +17,6 @@ def bhash(x):
         x = x.encode("ascii")
     return hashlib.blake2b(x,digest_size=32).digest()
 
-def Hash160(msg):
-    """RIPEME160(SHA256(msg)) -> bytes"""
-    h = hashlib.new('ripemd160')
-    h.update(hashlib.sha256(msg).digest())
-    return h.digest()
-
 def makeAddress(pubKeys, atLeast=None):
     if not type(pubKeys) is list:
         pubKeys=[pubKeys]
@@ -32,12 +26,7 @@ def makeAddress(pubKeys, atLeast=None):
     r = b""
     r += struct.pack("<B", atLeast)
     r += ser_vector([ SerBytes(x) for x in pubKeys])
-    return bhash(r)
-
-    if 0:
-        h = hashlib.new('ripemd160')
-        h.update(bhash(pubkey))
-        return h.digest()
+    return addrhash(r)
 
 class CKey(object):
     """An encapsulated private key

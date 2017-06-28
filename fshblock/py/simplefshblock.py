@@ -10,11 +10,13 @@ from fshutils import *
 import fshblock
 
 TX_HASH_LEN = 32  # 256 bits
-
+ADDR_HASH_LEN = 20  # 160 bits
 
 def hash(x):
     return hashlib.blake2b(x,digest_size=TX_HASH_LEN).digest()
 
+def addrhash(x):
+    return hashlib.blake2b(x,digest_size=ADDR_HASH_LEN).digest()
 
 def calcMerkle(lst):
     if len(lst) == 1:
@@ -61,7 +63,7 @@ class SimpleTxOut:
     def __init__(self, hash=None, value=None):
         if not hash is None:
             assert(type(hash) is bytes)
-            assert(len(hash) == TX_HASH_LEN)
+            assert(len(hash) == ADDR_HASH_LEN)
             self.hashbytes = hash
             self.value = value
 
@@ -148,7 +150,7 @@ class SimpleTxIn:
 
     def getAddress(self):
         txInData = self.serializeP2H()
-        return hash(txInData)
+        return addrhash(txInData)
 
     def deserializeP2H(self,f):
         self.atleast = struct.unpack("<B", f.read(1))[0]
@@ -372,6 +374,9 @@ class SimpleBlock(fshblock.FshBlock):
     def chainDifficulty(self):
         # todo calculate cumulative difficulty, for now return diff of last block
         return self.difficulty()
+
+    def createGenesisTx(self,changeAddress):
+        genesisTx = FshGenesisTxn("example doc", fshGenesisBlock, coins, fshDepositAddr, fshBackingAddr, changeAddress)
 
 def testHashing():
     h = hash(b"1")
