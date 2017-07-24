@@ -142,46 +142,19 @@ extern CCriticalSection cs_blockvalidationtime;
 extern CCriticalSection cs_LastBlockFile;
 extern CCriticalSection cs_nBlockSequenceId;
 
-
-// Internal stuff
-namespace
-{
-struct CBlockIndexWorkComparator
-{
-    bool operator()(CBlockIndex *pa, CBlockIndex *pb) const
-    {
-        // First sort by most total work, ...
-        if (pa->nChainWork > pb->nChainWork)
-            return false;
-        if (pa->nChainWork < pb->nChainWork)
-            return true;
-
-        // ... then by earliest time received, ...
-        if (pa->nSequenceId < pb->nSequenceId)
-            return false;
-        if (pa->nSequenceId > pb->nSequenceId)
-            return true;
-
-        // Use pointer address as tie breaker (should only happen with blocks
-        // loaded from disk, as those all have id 0).
-        if (pa < pb)
-            return false;
-        if (pa > pb)
-            return true;
-
-        // Identical blocks.
-        return false;
-    }
-};
-
-CBlockIndex *pindexBestInvalid;
-
 /**
  * The set of all CBlockIndex entries with BLOCK_VALID_TRANSACTIONS (for itself and all ancestors) and
  * as good as our current tip or better. Entries may be failed, though, and pruning nodes may be
  * missing the data for the block.
  */
 std::set<CBlockIndex *, CBlockIndexWorkComparator> setBlockIndexCandidates;
+
+// Internal stuff
+namespace
+{
+
+CBlockIndex *pindexBestInvalid;
+
 /** Number of nodes with fSyncStarted. */
 int nSyncStarted = 0;
 /** All pairs A->B, where A (or one of its ancestors) misses transactions, but B has transactions.
@@ -3103,7 +3076,7 @@ void static UpdateTip(CBlockIndex *pindexNew)
 
 /** Disconnect chainActive's tip. You probably want to call mempool.removeForReorg and manually re-limit mempool size
  * after this, with cs_main held. */
-bool static DisconnectTip(CValidationState &state, const Consensus::Params &consensusParams)
+bool DisconnectTip(CValidationState &state, const Consensus::Params &consensusParams)
 {
     AssertLockHeld(cs_main);
 

@@ -627,6 +627,7 @@ bool InvalidateBlock(CValidationState &state, const Consensus::Params &consensus
 
 /** Remove invalidity status from a block and its descendants. */
 bool ReconsiderBlock(CValidationState &state, CBlockIndex *pindex);
+bool DisconnectTip(CValidationState &state, const Consensus::Params &consensusParams);
 
 /** The currently-connected chain of blocks (protected by cs_main). */
 extern CChain chainActive;
@@ -672,10 +673,40 @@ struct COrphanTx
     int64_t nEntryTime; // BU - Xtreme Thinblocks: used for aging orphans out of the cache
     uint64_t nOrphanTxSize;
 };
+
+struct CBlockIndexWorkComparator
+{
+    bool operator()(CBlockIndex *pa, CBlockIndex *pb) const
+    {
+        // First sort by most total work, ...
+        if (pa->nChainWork > pb->nChainWork)
+            return false;
+        if (pa->nChainWork < pb->nChainWork)
+            return true;
+
+        // ... then by earliest time received, ...
+        if (pa->nSequenceId < pb->nSequenceId)
+            return false;
+        if (pa->nSequenceId > pb->nSequenceId)
+            return true;
+
+        // Use pointer address as tie breaker (should only happen with blocks
+        // loaded from disk, as those all have id 0).
+        if (pa < pb)
+            return false;
+        if (pa > pb)
+            return true;
+
+        // Identical blocks.
+        return false;
+    }
+};
+
 // BU: begin creating separate critical section for orphan cache and untangling from cs_main.
 extern CCriticalSection cs_orphancache;
 extern std::map<uint256, COrphanTx> mapOrphanTransactions GUARDED_BY(cs_orphancache);
 extern std::map<uint256, std::set<uint256> > mapOrphanTransactionsByPrev GUARDED_BY(cs_orphancache);
+extern std::set<CBlockIndex *, CBlockIndexWorkComparator> setBlockIndexCandidates;
 
 void EraseOrphanTx(uint256 hash) EXCLUSIVE_LOCKS_REQUIRED(cs_orphancache);
 // BU: end

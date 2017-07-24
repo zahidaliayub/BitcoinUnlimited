@@ -59,6 +59,7 @@ int64_t nMaxTipAge = DEFAULT_MAX_TIP_AGE;
 bool IsTrafficShapingEnabled();
 UniValue validateblocktemplate(const UniValue &params, bool fHelp);
 UniValue validatechainhistory(const UniValue &params, bool fHelp);
+UniValue rewindblockchain(const UniValue &height, bool fHelp);
 
 bool MiningAndExcessiveBlockValidatorRule(const uint64_t newExcessiveBlockSize, const uint64_t newMiningBlockSize)
 {
@@ -1472,6 +1473,8 @@ static const CRPCCommand commands[] =
     { "mining",             "setblockversion",        &setblockversion,        true  },
     { "mining",             "validateblocktemplate",  &validateblocktemplate,  true  },
 
+    { "blockchain",         "rewind",                 &rewindblockchain,       true  },
+
     /* Utility functions */
     { "util",               "getstatlist",            &getstatlist,            true  },
     { "util",               "getstat",                &getstat,                true  },
@@ -1492,6 +1495,110 @@ void RegisterUnlimitedRPCCommands(CRPCTable &tableRPC)
 {
     for (unsigned int vcidx = 0; vcidx < ARRAYLEN(commands); vcidx++)
         tableRPC.appendCommand(commands[vcidx].name, &commands[vcidx]);
+}
+
+/** Comparison function for sorting the getchaintips heads.  */
+struct CompareBlocksByHeight
+{
+    bool operator()(const CBlockIndex *a, const CBlockIndex *b) const
+    {
+        /* Make sure that unequal blocks with the same height do not compare
+           equal. Use the pointers themselves to make a distinction. */
+
+        if (a->nHeight != b->nHeight)
+            return (a->nHeight > b->nHeight);
+
+        return a < b;
+    }
+};
+
+UniValue rewindblockchain(const UniValue &params, bool fHelp)
+{
+    if (fHelp || (params.size() < 1))
+        throw runtime_error("rewind blockHeight\n"
+                            "\nrewinds the blockchain to this height\n");
+
+    LOCK(cs_main);
+
+    uint64_t height = boost::lexical_cast<unsigned int>(params[0].get_str());
+
+    if (height > (uint64_t) chainActive.Height())
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block index out of range");
+
+    CBlockIndex* pindex = chainActive[height];
+
+    const CChainParams &chainparams = Params();
+
+    while(1)
+    {
+        while (chainActive.Contains(pindex))
+        {
+            CBlockIndex *pindexWalk = chainActive.Tip();
+            if (!pindexWalk) break;
+            // force reconsidering the block
+            pindexWalk->nStatus &= ~BLOCK_VALID_MASK;
+            pindexWalk->nStatus |= BLOCK_VALID_HEADER;
+            setDirtyBlockIndex.insert(pindexWalk);
+            setBlockIndexCandidates.erase(pindexWalk);  // remove this chain
+            // ActivateBestChain considers blocks already in chainActive
+            // unconditionally valid already, so force disconnect away from it.
+            CValidationState state;
+            int64_t start = GetTimeMicros();
+            if (!DisconnectTip(state, chainparams.GetConsensus()))
+            {
+                mempool.removeForReorg(pcoinsTip, chainActive.Tip()->nHeight + 1, STANDARD_LOCKTIME_VERIFY_FLAGS);
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "DisconnectTip failed");
+            }
+            int64_t elapsed = GetTimeMicros()-start;
+            LogPrintf("elapsed time: %lld mempool: %d\n", elapsed, mempool.size());
+        }
+        FlushStateToDisk();
+        CValidationState state;
+        if (!ActivateBestChain(state, chainparams, nullptr, false))
+        {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "ActivateBestChain failed");
+        }
+
+        // Done if chainactive is less then provided height
+        if (height > (uint64_t) chainActive.Height()) break;
+        // otherwise continue with the new chain
+        pindex = chainActive[height];
+    }
+
+    // Now identify the tips and add them back in
+    std::set<CBlockIndex*, CompareBlocksByHeight> setTips;
+    std::set<CBlockIndex*> setOrphans;
+    std::set<CBlockIndex*> setPrevs;
+
+    BOOST_FOREACH(const PAIRTYPE(const uint256, CBlockIndex*)& item, mapBlockIndex)
+    {
+        if (!chainActive.Contains(item.second)) {
+            setOrphans.insert(item.second);
+            setPrevs.insert(item.second->pprev);
+        }
+    }
+
+    for (std::set<CBlockIndex*>::iterator it = setOrphans.begin(); it != setOrphans.end(); ++it)
+    {
+        if (setPrevs.count(*it) == 0)
+        {
+            CBlockIndex* tmp = *it;
+            if (tmp && !(tmp->nStatus&BLOCK_FAILED_MASK))
+                setTips.insert(*it);
+        }
+    }
+
+    BOOST_FOREACH(CBlockIndex* block, setTips)
+    {
+        setBlockIndexCandidates.insert(block);
+    }
+
+    CValidationState state;
+    if (!ActivateBestChain(state, chainparams, nullptr, false))
+    {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "ActivateBestChain failed");
+    }
+    return NullUniValue;
 }
 
 
@@ -1741,20 +1848,6 @@ extern UniValue getstructuresizes(const UniValue &params, bool fHelp)
 }
 #endif
 
-/** Comparison function for sorting the getchaintips heads.  */
-struct CompareBlocksByHeight
-{
-    bool operator()(const CBlockIndex *a, const CBlockIndex *b) const
-    {
-        /* Make sure that unequal blocks with the same height do not compare
-           equal. Use the pointers themselves to make a distinction. */
-
-        if (a->nHeight != b->nHeight)
-            return (a->nHeight > b->nHeight);
-
-        return a < b;
-    }
-};
 
 void MarkAllContainingChainsInvalid(CBlockIndex *invalidBlock)
 {
