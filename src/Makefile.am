@@ -70,6 +70,10 @@ if BUILD_BITCOIN_UTILS
   bin_PROGRAMS += bitcoin-cli bitcoin-tx
 endif
 
+#if BUILD_BITCOIN_ANALYZE
+  bin_PROGRAMS += blockchain-analysis
+#endif
+
 .PHONY: FORCE check-symbols check-security check-formatting
 # bitcoin core #
 BITCOIN_CORE_H = \
@@ -384,6 +388,26 @@ bitcoind_LDADD = \
   $(LIBSECP256K1)
 
 bitcoind_LDADD += $(BOOST_LIBS) $(BDB_LIBS) $(SSL_LIBS) $(CRYPTO_LIBS) $(MINIUPNPC_LIBS) $(EVENT_PTHREADS_LIBS) $(EVENT_LIBS) $(ZMQ_LIBS)
+
+# blockchain-analysis binary #
+blockchain_analysis_SOURCES = analysis.cpp
+blockchain_analysis_CPPFLAGS = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES)
+blockchain_analysis_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
+blockchain_analysis_LDFLAGS = $(RELDFLAGS) $(AM_LDFLAGS) $(LIBTOOL_APP_LDFLAGS)
+blockchain_analysis_LDADD = \
+  $(LIBBITCOIN_SERVER) \
+  $(LIBBITCOIN_COMMON) \
+  $(LIBUNIVALUE) \
+  $(LIBBITCOIN_UTIL) \
+  $(LIBBITCOIN_WALLET) \
+  $(LIBBITCOIN_ZMQ) \
+  $(LIBBITCOIN_CONSENSUS) \
+  $(LIBBITCOIN_CRYPTO) \
+  $(LIBLEVELDB) \
+  $(LIBMEMENV) \
+  $(LIBSECP256K1)
+
+blockchain_analysis_LDADD += $(BOOST_LIBS) $(BDB_LIBS) $(SSL_LIBS) $(CRYPTO_LIBS) $(MINIUPNPC_LIBS)  $(EVENT_PTHREADS_LIBS) $(EVENT_LIBS) $(ZMQ_LIBS)
 
 # bitcoin-cli binary #
 bitcoin_cli_SOURCES = bitcoin-cli.cpp

@@ -36,7 +36,7 @@ protected:
 
 
 public:
-    CCoinsViewDB(size_t nCacheSize, bool fMemory = false, bool fWipe = false);
+    CCoinsViewDB(size_t nCacheSize, bool fMemory = false, bool fWipe = false, std::string dbname="chainstate");
 
     bool GetCoins(const uint256 &txid, CCoins &coins) const;
     bool HaveCoins(const uint256 &txid) const;

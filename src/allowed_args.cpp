@@ -234,7 +234,8 @@ static void addGeneralOptions(AllowedArgs &allowedArgs, HelpMessageMode mode)
             strprintf(_("How many blocks to check at startup (default: %u, 0 = all)"), DEFAULT_CHECKBLOCKS))
         .addArg("checklevel=<n>", requiredInt,
             strprintf(_("How thorough the block verification of -checkblocks is (0-4, default: %u)"),
-                    DEFAULT_CHECKLEVEL));
+                    DEFAULT_CHECKLEVEL))
+        .addArg("utxoDb", requiredStr, _("change the utxo set (chainstate) db subdirectory"));
 
 #ifndef WIN32
     if (mode == HMM_BITCOIND)

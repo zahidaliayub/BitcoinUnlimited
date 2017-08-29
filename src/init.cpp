@@ -860,7 +860,6 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     // ********************************************************* Step 6: load block chain
 
     fReindex = GetBoolArg("-reindex", false);
-
     // Upgrading to 0.8; hard-link the old blknnnn.dat files into /blocks/
     boost::filesystem::path blocksDir = GetDataDir() / "blocks";
     if (!boost::filesystem::exists(blocksDir))
@@ -904,6 +903,8 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     LogPrintf("* Using %.1fMiB for chain state database\n", nCoinDBCache * (1.0 / 1024 / 1024));
     LogPrintf("* Using %.1fMiB for in-memory UTXO set\n", nCoinCacheUsage * (1.0 / 1024 / 1024));
 
+    std::string chainstateDb = GetArg("-utxoDb","chainstate");
+
     bool fLoaded = false;
     while (!fLoaded) {
         bool fReset = fReindex;
@@ -921,7 +922,7 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
                 delete pblocktree;
 
                 pblocktree = new CBlockTreeDB(nBlockTreeDBCache, false, fReindex);
-                pcoinsdbview = new CCoinsViewDB(nCoinDBCache, false, fReindex);
+                pcoinsdbview = new CCoinsViewDB(nCoinDBCache, false, fReindex, chainstateDb);
                 pcoinscatcher = new CCoinsViewErrorCatcher(pcoinsdbview);
                 pcoinsTip = new CCoinsViewCache(pcoinscatcher);
 

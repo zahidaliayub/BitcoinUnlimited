@@ -62,6 +62,7 @@
 /**
  * Global state
  */
+void (*AnalyzeBlock) (const CBlock &block, CBlockIndex *pindex, CCoinsViewCache &view, std::vector<int>& prevheights) = nullptr;
 
 // BU variables moved to globals.cpp
 // BU moved CCriticalSection cs_main;
@@ -2683,6 +2684,7 @@ bool ConnectBlock(const CBlock &block,
             return true;
 
 
+        if (AnalyzeBlock) AnalyzeBlock(block, pindex, view, prevheights);
         /*****************************************************************************************************************
          *                         Start update of UTXO, if this block wins the validation race *
          *****************************************************************************************************************/

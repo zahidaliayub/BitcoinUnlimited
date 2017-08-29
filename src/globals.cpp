@@ -274,7 +274,6 @@ CTweak<uint64_t> checkScriptDays("blockchain.checkScriptDays",
     "The number of days in the past we check scripts during initial block download.",
     DEFAULT_CHECKPOINT_DAYS);
 
-
 CRequestManager requester; // after the maps nodes and tweaks
 
 CStatHistory<unsigned int> txAdded; //"memPool/txAdded");
