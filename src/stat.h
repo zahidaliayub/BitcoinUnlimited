@@ -195,7 +195,7 @@ protected:
 
     void initHistoryTime(void)
     {
-        historyTime = new int64_t* [STATISTICS_NUM_RANGES];
+        historyTime = new int64_t *[STATISTICS_NUM_RANGES];
         for (int i = 0; i < STATISTICS_NUM_RANGES; i++)
         {
             historyTime[i] = new int64_t[STATISTICS_SAMPLES];
@@ -266,7 +266,11 @@ public:
             Start();
     }
 
-    virtual ~CStatHistory() { Stop(); delHistoryTime(); }
+    virtual ~CStatHistory()
+    {
+        Stop();
+        delHistoryTime();
+    }
     CStatHistory &operator<<(const DataType &rhs)
     {
         if (op & STAT_INDIVIDUAL)
@@ -426,7 +430,7 @@ public:
 
     void timeout(const boost::system::error_code &e)
     {
-        if (e==boost::asio::error::operation_aborted)
+        if (e == boost::asio::error::operation_aborted)
         {
             return;
         }
