@@ -185,7 +185,7 @@ protected:
     unsigned int op;
     boost::asio::steady_timer timer;
     RecordType history[STATISTICS_NUM_RANGES][STATISTICS_SAMPLES];
-    int64_t historyTime[STATISTICS_NUM_RANGES][STATISTICS_SAMPLES];
+    int64_t **historyTime;
     int loc[STATISTICS_NUM_RANGES];
     int len[STATISTICS_NUM_RANGES];
     uint64_t timerCount;
@@ -193,20 +193,41 @@ protected:
     unsigned int sampleCount;
     RecordType total;
 
+    void initHistoryTime(void)
+    {
+        historyTime = new int64_t* [STATISTICS_NUM_RANGES];
+        for (int i = 0; i < STATISTICS_NUM_RANGES; i++)
+        {
+            historyTime[i] = new int64_t[STATISTICS_SAMPLES];
+        }
+    }
+
+    void delHistoryTime(void)
+    {
+        for (int i = STATISTICS_NUM_RANGES; i > 0;)
+        {
+            delete[] historyTime[--i];
+        }
+        delete[] historyTime;
+    }
+
 public:
     CStatHistory() : CStat<DataType, RecordType>(), op(STAT_OP_SUM | STAT_KEEP_COUNT), timer(stat_io_service)
     {
+        initHistoryTime();
         Clear(false);
     }
     CStatHistory(const char *name, unsigned int operation = STAT_OP_SUM)
         : CStat<DataType, RecordType>(name), op(operation), timer(stat_io_service)
     {
+        initHistoryTime();
         Clear();
     }
 
     CStatHistory(const std::string &name, unsigned int operation = STAT_OP_SUM)
         : CStat<DataType, RecordType>(name), op(operation), timer(stat_io_service)
     {
+        initHistoryTime();
         Clear();
     }
 
@@ -245,7 +266,7 @@ public:
             Start();
     }
 
-    virtual ~CStatHistory() { Stop(); }
+    virtual ~CStatHistory() { Stop(); delHistoryTime(); }
     CStatHistory &operator<<(const DataType &rhs)
     {
         if (op & STAT_INDIVIDUAL)
